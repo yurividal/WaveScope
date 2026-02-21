@@ -1636,6 +1636,7 @@ _MONITOR_MASTER_TMPL = """\
 IFACE={iface}
 MON=mon0
 OUTPUT={output}
+STOP_FILE={stop_file}
 
 # ── SETUP ──────────────────────────────────────────────
 {nm_stop}ip link set "$IFACE" down
@@ -1647,8 +1648,13 @@ echo "WAVESCOPE_SETUP_OK"
 # ── CAPTURE ─────────────────────────────────────────
 tcpdump -i "$MON" -e -nn -U -w "$OUTPUT" &
 TDPID=$!
-trap 'kill -INT $TDPID 2>/dev/null; wait $TDPID 2>/dev/null' TERM INT
-wait "$TDPID"
+# Poll stop-file instead of relying on pkexec SIGTERM forwarding
+while kill -0 "$TDPID" 2>/dev/null && [[ ! -f "$STOP_FILE" ]]; do
+    sleep 0.3
+done
+kill -INT "$TDPID" 2>/dev/null
+wait "$TDPID" 2>/dev/null
+rm -f "$STOP_FILE" 2>/dev/null
 echo "WAVESCOPE_CAPTURE_DONE"
 
 # ── TEARDOWN ────────────────────────────────────────
@@ -1680,6 +1686,7 @@ class MonitorModeWindow(QDialog):
         self._state          = self._ST_IDLE
         self._proc           = None
         self._master_script  = ""      # path to single temp script
+        self._stop_file      = ""      # flag file: touch to stop capture
         self._stdout_buf     = ""      # partial-line buffer for stdout
         self._start_time     = 0.0
         self._timer          = QTimer(self)
@@ -1883,12 +1890,15 @@ class MonitorModeWindow(QDialog):
         nm_stop  = "systemctl stop NetworkManager\n" if self._nm_was_running else ""
         nm_start = "systemctl start NetworkManager\n" if self._nm_was_running else ""
 
+        import tempfile as _tf
+        self._stop_file = _tf.mktemp(prefix="wavescope_stop_", suffix=".flag")
         script_body = _MONITOR_MASTER_TMPL.format(
             iface=self._iface_name,
             output=self._output_path,
             chan_args=chan_args,
             nm_stop=nm_stop,
             nm_start=nm_start,
+            stop_file=self._stop_file,
         )
         self._master_script = self._write_temp_script(script_body)
         self._stdout_buf    = ""
@@ -1963,21 +1973,39 @@ class MonitorModeWindow(QDialog):
                 self._master_script = ""
         except OSError:
             pass
+        try:
+            if self._stop_file and os.path.exists(self._stop_file):
+                os.unlink(self._stop_file)
+                self._stop_file = ""
+        except OSError:
+            pass
 
 
     def _request_stop(self):
         if self._state in (self._ST_CAPTURE, self._ST_SETUP) and self._proc:
             self._btn_start.setEnabled(False)
             self._btn_start.setText("⏳  Stopping…")
-            self._log_line("⏹  Stopping capture — waiting for tcpdump to flush…")
-            self._proc.terminate()   # SIGTERM → bash trap → SIGINT → tcpdump exits cleanly
-            QTimer.singleShot(6000, self._force_kill_capture)
+            self._log_line("⏹  Stopping capture — signalling tcpdump to flush…")
+            # Touch the flag file — bash's polling loop will see it and
+            # send SIGINT to tcpdump, then run teardown.  This avoids the
+            # pkexec-doesn't-forward-SIGTERM problem entirely.
+            try:
+                open(self._stop_file, "w").close()
+            except OSError:
+                pass
+            # Fallback: if bash still hasn't exited after 12 s, force-kill
+            QTimer.singleShot(12000, self._force_kill_capture)
 
     def _force_kill_capture(self):
         from PyQt6.QtCore import QProcess
         if self._state != self._ST_IDLE and self._proc and \
                 self._proc.state() != QProcess.ProcessState.NotRunning:
-            self._log_line("⚠  Process did not exit in time — force-killing…")
+            self._log_line("⚠  Still running after 12 s — force-killing (teardown may be incomplete)…")
+            try:
+                if self._stop_file:
+                    os.unlink(self._stop_file)
+            except OSError:
+                pass
             self._proc.kill()
 
     # ── Helpers ───────────────────────────────────────────────────────────
