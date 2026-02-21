@@ -91,6 +91,7 @@ Terminal=false
 Type=Application
 Categories=Network;Utility;
 Keywords=wifi;wireless;network;analyzer;
+StartupWMClass=wavescope
 EOF
 
 # ── 8. Icon ──────────────────────────────────────────────────────────────────

@@ -2069,6 +2069,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.setDesktopFileName("wavescope")   # GNOME dock grouping / WM_CLASS hint
     app.setOrganizationName("nmcli-gui")
     app.setStyle("Fusion")
     _icon_path = Path(__file__).parent / "assets" / "icon.svg"

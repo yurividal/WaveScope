@@ -46,6 +46,7 @@ Terminal=false
 Type=Application
 Categories=Network;Utility;
 Keywords=wifi;wireless;network;
+StartupWMClass=wavescope
 DESKEOF
 update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
 
