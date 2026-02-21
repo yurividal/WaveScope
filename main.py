@@ -46,7 +46,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.0.1"
+VERSION = "1.0.3"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120   # seconds of signal history to keep
@@ -76,8 +76,10 @@ CH5 = {
     149: 5745, 153: 5765, 157: 5785, 161: 5805, 165: 5825,
     169: 5845, 173: 5865, 177: 5885,
 }
-# 6 GHz channels → center frequency (Wi-Fi 6E)
-CH6 = {i * 4 - 3: 5950 + (i * 4 - 3) * 5 for i in range(1, 60)}
+# 6 GHz channels → center frequency (Wi-Fi 6E / IEEE 802.11ax)
+# Primary 20 MHz channels: 1, 5, 9, …, 233  — formula: center_MHz = 5950 + (channel × 5)
+# Band covers 5925–7125 MHz (UNII-5/6/7/8).  59 primary channels total.
+CH6 = {ch: 5950 + ch * 5 for ch in range(1, 234, 4)}   # ch 1..233, step 4
 
 ALL_CHANNELS = {**CH24, **CH5, **CH6}
 
@@ -1198,19 +1200,33 @@ class ChannelGraphWidget(QWidget):
     _BAND_EXTENTS: Dict[str, Tuple[int, int]] = {
         "2.4 GHz": (2385, 2500),
         "5 GHz":   (5080, 5920),
-        "6 GHz":   (5900, 7200),
+        # 6 GHz: band edges 5925–7125 MHz; ch1 center=5955, ch233 center=7115
+        "6 GHz":   (5930, 7130),
     }
     _BAND_TICKS: Dict[str, dict] = {
         "2.4 GHz": CH24,
         "5 GHz":   CH5,
         "6 GHz":   CH6,
     }
-    # Visual panel width weights — balanced so 2.4 GHz is readable
+    # Visual panel width weights — proportional to MHz span
+    # 2.4 GHz ~115 MHz, 5 GHz ~840 MHz, 6 GHz ~1200 MHz
     _BAND_STRETCH: Dict[str, int] = {
         "2.4 GHz": 2,
         "5 GHz":   5,
-        "6 GHz":   5,
+        "6 GHz":   8,   # wider: 1200 MHz span vs 840 for 5 GHz
     }
+    # Tick stride per band — subsample dense channel grids for readability
+    _BAND_TICK_STRIDE: Dict[str, int] = {
+        "2.4 GHz": 1,   # 14 channels → show all
+        "5 GHz":   1,   # ~36 channels → show all
+        "6 GHz":   1,   # handled via _BAND_TICK_SET override below
+    }
+    # For 6 GHz: show the 80/160/320 MHz anchor channels used by Wi-Fi 6E/7 APs
+    # These are the standard 6 GHz preferred scanning channels (PSC) for 20 MHz:
+    # every 4th primary, i.e. ch 5, 21, 37, 53, 69, 85, 101, 117, 133, 149, 165,
+    # 181, 197, 213, 229 — plus ch 1 and 233 as band-edge anchors.
+    _6GHZ_TICK_CHANS: List[int] = [1, 5, 21, 37, 53, 69, 85, 101, 117, 133, 149,
+                                    165, 181, 197, 213, 229, 233]
 
     def __init__(self):
         super().__init__()
@@ -1370,7 +1386,9 @@ class ChannelGraphWidget(QWidget):
         for pw in self._plots.values():
             pw.clear()
 
-        if not visible or not needed:
+        # If no bands are needed at all (unknown band selected) bail out.
+        # Do NOT bail when visible is empty — we still need correct axes.
+        if not needed:
             return
 
         floor = CHAN_DBM_FLOOR
@@ -1417,19 +1435,60 @@ class ChannelGraphWidget(QWidget):
             self._band_channels[band] = {float(f): c
                                           for c, f in tick_src.items()
                                           if xmin <= f <= xmax}
-            ticks = [(f, str(c))
-                     for c, f in sorted(tick_src.items(), key=lambda x: x[1])
-                     if xmin <= f <= xmax]
+            # Build channel ticks — use curated anchor-channel set for 6 GHz
+            if band == "6 GHz":
+                allowed = set(self._6GHZ_TICK_CHANS)
+                ticks = [(float(f), str(c))
+                         for c, f in tick_src.items()
+                         if xmin <= f <= xmax and c in allowed]
+                ticks.sort()
+            else:
+                stride = self._BAND_TICK_STRIDE.get(band, 1)
+                sorted_chan = sorted(tick_src.items(), key=lambda x: x[1])
+                ticks = [(f, str(c))
+                         for i, (c, f) in enumerate(sorted_chan)
+                         if xmin <= f <= xmax and i % stride == 0]
             if ticks:
                 pw.getAxis("bottom").setTicks([ticks])
-            # DFS indicator — thin amber bar along the bottom edge only
+
+            # ── Band-specific spectrum annotations ─────────────────────────
             if band == "5 GHz":
+                # DFS channels — thin amber bar along the bottom edge
                 dfs_bar = pg.PlotCurveItem(
                     [5250, 5730], [floor, floor],
                     pen=pg.mkPen(QColor(255, 170, 30), width=5)
                 )
                 dfs_bar.setZValue(10)
                 pw.addItem(dfs_bar)
+
+            elif band == "6 GHz":
+                # ── UNII sub-band markers ──────────────────────────────────
+                # UNII-5 (5925–6425 MHz): Low-Power Indoor + VLP, no AFC needed
+                # UNII-6 (6425–6525 MHz): Standard Power, AFC required
+                # UNII-7 (6525–6875 MHz): Standard Power, AFC required
+                # UNII-8 (6875–7125 MHz): Standard Power, AFC required
+                _UNII_SEGMENTS = [
+                    (5925, 6425, QColor("#26a65b"), "UNII-5 (LPI)"),    # green
+                    (6425, 6525, QColor("#e67e22"), "UNII-6 (AFC)"),    # orange
+                    (6525, 6875, QColor("#e67e22"), "UNII-7 (AFC)"),    # orange
+                    (6875, 7125, QColor("#e67e22"), "UNII-8 (AFC)"),    # orange
+                ]
+                for seg_start, seg_end, seg_color, seg_label in _UNII_SEGMENTS:
+                    bar = pg.PlotCurveItem(
+                        [seg_start, seg_end], [floor, floor],
+                        pen=pg.mkPen(seg_color, width=4)
+                    )
+                    bar.setZValue(10)
+                    pw.addItem(bar)
+                # Vertical boundary lines at UNII transitions
+                for boundary_mhz in (6425, 6525, 6875):
+                    vline = pg.InfiniteLine(
+                        pos=boundary_mhz, angle=90,
+                        pen=pg.mkPen(QColor(180, 140, 60, 90), width=1,
+                                     style=Qt.PenStyle.DashLine)
+                    )
+                    pw.addItem(vline)
+
             pw.setXRange(xmin, xmax, padding=0.01)
             pw.setYRange(floor, CHAN_DBM_CEIL, padding=0.02)
 
