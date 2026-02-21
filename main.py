@@ -11,6 +11,8 @@ import re
 import math
 import time
 import json
+import stat
+import tempfile
 import urllib.request
 import subprocess
 from pathlib import Path
@@ -1582,6 +1584,478 @@ class SignalHistoryWidget(QWidget):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Monitor Mode — Packet Capture
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _detect_wifi_interfaces() -> List[Dict[str, str]]:
+    """
+    Parse `iw dev` output and return a list of dicts:
+      { name, phy, type, connected_ssid }
+    connected_ssid is "" when the interface is not associated.
+    """
+    try:
+        out = subprocess.run(["iw", "dev"], capture_output=True, text=True, timeout=4).stdout
+    except Exception:
+        return []
+
+    interfaces: List[Dict[str, str]] = []
+    current_phy  = ""
+    current_if: Dict[str, str] = {}
+
+    for raw in out.splitlines():
+        line = raw.strip()
+        if line.startswith("phy#"):
+            current_phy = line
+        elif line.startswith("Interface "):
+            current_if = {"name": line.split()[1], "phy": current_phy,
+                          "type": "", "connected_ssid": ""}
+            interfaces.append(current_if)
+        elif line.startswith("type ") and current_if:
+            current_if["type"] = line.split(None, 1)[1]
+        elif line.startswith("ssid ") and current_if:
+            current_if["connected_ssid"] = line.split(None, 1)[1]
+
+    # Only managed (station) interfaces — skip existing monitor interfaces
+    return [i for i in interfaces if i["type"] in ("managed", "AP", "")]
+
+
+def _iw_chan_arg(channel: int, band: str) -> List[str]:
+    """
+    Return the `iw set channel` argument list for the given channel.
+    For 6 GHz we pass the frequency directly; for 2.4/5 GHz the channel number.
+    """
+    if band == "6 GHz":
+        freq = CH6.get(channel, 0)
+        if freq:
+            return [str(freq)]
+    return [str(channel)]
+
+
+_MONITOR_MASTER_TMPL = """\
+#!/bin/bash
+IFACE={iface}
+MON=mon0
+OUTPUT={output}
+
+# ── SETUP ──────────────────────────────────────────────
+{nm_stop}ip link set "$IFACE" down
+iw dev "$IFACE" interface add "$MON" type monitor 2>/dev/null || true
+ip link set "$MON" up
+iw dev "$MON" set channel {chan_args}
+echo "WAVESCOPE_SETUP_OK"
+
+# ── CAPTURE ─────────────────────────────────────────
+tcpdump -i "$MON" -e -nn -U -w "$OUTPUT" &
+TDPID=$!
+trap 'kill -INT $TDPID 2>/dev/null; wait $TDPID 2>/dev/null' TERM INT
+wait "$TDPID"
+echo "WAVESCOPE_CAPTURE_DONE"
+
+# ── TEARDOWN ────────────────────────────────────────
+ip link set "$MON" down 2>/dev/null || true
+iw dev "$MON" del 2>/dev/null || true
+ip link set "$IFACE" up 2>/dev/null || true
+{nm_start}echo "WAVESCOPE_TEARDOWN_OK"
+"""
+
+
+class MonitorModeWindow(QDialog):
+    """
+    Packet-capture window using a temporary monitor-mode interface (mon0).
+    Requires root via pkexec / Polkit.
+    """
+
+    # Internal capture states
+    _ST_IDLE     = "idle"
+    _ST_SETUP    = "setup"
+    _ST_CAPTURE  = "capture"
+    _ST_TEARDOWN = "teardown"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("📡  Monitor Mode  —  Packet Capture")
+        self.setMinimumSize(620, 640)
+        self.setModal(False)
+
+        self._state          = self._ST_IDLE
+        self._proc           = None
+        self._master_script  = ""      # path to single temp script
+        self._stdout_buf     = ""      # partial-line buffer for stdout
+        self._start_time     = 0.0
+        self._timer          = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+        self._nm_was_running = False
+
+        self._build_ui()
+        self._populate_interfaces()
+
+    # ── UI ────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+
+        # ── Warning banner ────────────────────────────────────────────────
+        warn = QLabel(
+            "⚠  Monitor mode requires <b>root privileges</b> (Polkit prompt will appear).<br>"
+            "The selected interface will be <b>temporarily disconnected</b> from WiFi "
+            "while capture is running."
+        )
+        warn.setWordWrap(True)
+        warn.setTextFormat(Qt.TextFormat.RichText)
+        warn.setStyleSheet(
+            "QLabel { background:#2a1800; color:#ffcc66; border:1px solid #a06010;"
+            " border-radius:5px; padding:8px 12px; }"
+        )
+        layout.addWidget(warn)
+
+        # ── Interface / channel configuration ────────────────────────────
+        cfg = QFrame()
+        cfg.setFrameShape(QFrame.Shape.StyledPanel)
+        cfg_layout = QFormLayout(cfg)
+        cfg_layout.setVerticalSpacing(8)
+        cfg_layout.setHorizontalSpacing(14)
+        cfg_layout.setContentsMargins(12, 10, 12, 10)
+
+        self._iface_combo = QComboBox()
+        self._iface_combo.setMinimumWidth(220)
+        self._iface_combo.currentIndexChanged.connect(self._on_iface_change)
+        cfg_layout.addRow("Interface:", self._iface_combo)
+
+        self._band_sel = QComboBox()
+        self._band_sel.addItems(["2.4 GHz", "5 GHz", "6 GHz"])
+        self._band_sel.currentTextChanged.connect(self._on_band_sel)
+        cfg_layout.addRow("Band:", self._band_sel)
+
+        self._chan_combo = QComboBox()
+        self._chan_combo.setMinimumWidth(180)
+        cfg_layout.addRow("Channel:", self._chan_combo)
+
+        # Output file row
+        out_row = QWidget()
+        out_hl  = QHBoxLayout(out_row)
+        out_hl.setContentsMargins(0, 0, 0, 0)
+        out_hl.setSpacing(6)
+        self._out_edit = QLineEdit()
+        default_out    = str(Path.home() / "capture.pcap")
+        self._out_edit.setText(default_out)
+        self._out_edit.setPlaceholderText("/path/to/output.pcap")
+        out_hl.addWidget(self._out_edit)
+        btn_browse = QPushButton("Browse…")
+        btn_browse.setMaximumWidth(80)
+        btn_browse.clicked.connect(self._on_browse)
+        out_hl.addWidget(btn_browse)
+        cfg_layout.addRow("Output file:", out_row)
+
+        layout.addWidget(cfg)
+
+        # ── Start / Stop button ───────────────────────────────────────────
+        self._btn_start = QPushButton("▶  Start Capture")
+        self._btn_start.setMinimumHeight(38)
+        self._btn_start.setStyleSheet(
+            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            " border-radius:5px; font-size:11pt; font-weight:bold; }"
+            "QPushButton:hover { background:#226b33; }"
+            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+        )
+        self._btn_start.clicked.connect(self._on_start_stop)
+        layout.addWidget(self._btn_start)
+
+        # ── Status row ────────────────────────────────────────────────────
+        stats_row = QHBoxLayout()
+        self._lbl_state   = QLabel("Idle")
+        self._lbl_state.setStyleSheet("font-weight:bold; color:#7eb8f7;")
+        self._lbl_elapsed = QLabel("00:00")
+        self._lbl_elapsed.setStyleSheet("color:#a9b4cc; font-family:monospace;")
+        self._lbl_size    = QLabel("")
+        self._lbl_size.setStyleSheet("color:#a9b4cc;")
+        stats_row.addWidget(self._lbl_state)
+        stats_row.addStretch()
+        stats_row.addWidget(QLabel("Elapsed: "))
+        stats_row.addWidget(self._lbl_elapsed)
+        stats_row.addWidget(QLabel("   File: "))
+        stats_row.addWidget(self._lbl_size)
+        layout.addLayout(stats_row)
+
+        # ── Log area ──────────────────────────────────────────────────────
+        from PyQt6.QtWidgets import QPlainTextEdit
+        self._log = QPlainTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setMaximumBlockCount(500)
+        self._log.setStyleSheet(
+            "QPlainTextEdit { background:#090d14; color:#8fa8c0;"
+            " font-family:monospace; font-size:9pt; border-radius:4px; }"
+        )
+        layout.addWidget(self._log)
+
+        # Populate band → channel on start
+        self._on_band_sel(self._band_sel.currentText())
+
+    # ── Populate helpers ──────────────────────────────────────────────────
+
+    def _populate_interfaces(self):
+        self._ifaces = _detect_wifi_interfaces()
+        self._iface_combo.clear()
+        if not self._ifaces:
+            self._iface_combo.addItem("No WiFi interfaces found")
+            self._btn_start.setEnabled(False)
+            return
+        for ifc in self._ifaces:
+            label = ifc["name"]
+            if ifc["connected_ssid"]:
+                label += f"  (connected: {ifc['connected_ssid']})"
+            self._iface_combo.addItem(label, ifc["name"])
+
+    def _on_iface_change(self, _idx):
+        pass  # could refresh band capabilities in future
+
+    def _on_band_sel(self, band: str):
+        self._chan_combo.clear()
+        if band == "2.4 GHz":
+            src = CH24
+        elif band == "5 GHz":
+            src = CH5
+        else:
+            src = CH6
+        for ch, freq in sorted(src.items(), key=lambda x: x[1]):
+            self._chan_combo.addItem(f"Ch {ch}  ({freq} MHz)", ch)
+
+    def _on_browse(self):
+        from PyQt6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Choose output file", str(Path.home()), "PCAP files (*.pcap);;All files (*)"
+        )
+        if path:
+            if not path.endswith(".pcap"):
+                path += ".pcap"
+            self._out_edit.setText(path)
+
+    # ── Capture control ───────────────────────────────────────────────────
+
+    def _on_start_stop(self):
+        if self._state == self._ST_IDLE:
+            self._start_capture()
+        else:
+            self._request_stop()
+
+    def _start_capture(self):
+        iface = self._iface_combo.currentData()
+        if not iface:
+            self._log_line("⚠  No interface selected.")
+            return
+        channel = self._chan_combo.currentData()
+        if not channel:
+            self._log_line("⚠  No channel selected.")
+            return
+        output = self._out_edit.text().strip()
+        if not output:
+            self._log_line("⚠  No output file specified.")
+            return
+
+        band = self._band_sel.currentText()
+        self._iface_name = iface
+        self._output_path = output
+        self._channel    = channel
+        self._band       = band
+
+        # Check & record if NetworkManager is running so we restore it
+        nm_check = subprocess.run(
+            ["systemctl", "is-active", "NetworkManager"],
+            capture_output=True, text=True
+        )
+        self._nm_was_running = nm_check.returncode == 0
+
+        self._log_line(f"Interface : {iface}")
+        self._log_line(f"Band/Chan : {band}  ch {channel}")
+        self._log_line(f"Output    : {output}")
+        self._log_line(f"NM active : {self._nm_was_running}")
+        self._log_line("─" * 50)
+
+        self._run_master()
+
+    def _run_master(self):
+        """Build and launch the single combined pkexec script."""
+        self._set_state(self._ST_SETUP, "Setting up monitor interface…")
+
+        chan_args = " ".join(_iw_chan_arg(self._channel, self._band))
+        nm_stop  = "systemctl stop NetworkManager\n" if self._nm_was_running else ""
+        nm_start = "systemctl start NetworkManager\n" if self._nm_was_running else ""
+
+        script_body = _MONITOR_MASTER_TMPL.format(
+            iface=self._iface_name,
+            output=self._output_path,
+            chan_args=chan_args,
+            nm_stop=nm_stop,
+            nm_start=nm_start,
+        )
+        self._master_script = self._write_temp_script(script_body)
+        self._stdout_buf    = ""
+
+        self._proc = self._make_process()
+        self._proc.readyReadStandardOutput.connect(self._on_stdout)
+        self._proc.readyReadStandardError.connect(self._on_stderr)
+        self._proc.finished.connect(self._on_proc_finished)
+        self._proc.start("pkexec", ["bash", self._master_script])
+        self._log_line("▶  Starting (Polkit authentication may appear…)")
+
+    def _on_stdout(self):
+        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(errors="replace")
+        while "\n" in self._stdout_buf:
+            line, self._stdout_buf = self._stdout_buf.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            if line == "WAVESCOPE_SETUP_OK":
+                self._log_line("✓  Monitor interface mon0 ready.")
+                self._set_state(self._ST_CAPTURE, "Capturing…")
+                self._start_time = time.monotonic()
+                self._timer.start()
+                self._log_line("▶  tcpdump running — click Stop to end capture.")
+            elif line == "WAVESCOPE_CAPTURE_DONE":
+                self._timer.stop()
+                self._set_state(self._ST_TEARDOWN, "Restoring interface…")
+                self._log_line("▶  Restoring interface and NetworkManager…")
+            elif line == "WAVESCOPE_TEARDOWN_OK":
+                self._log_line("✓  Interface and NetworkManager restored.")
+            else:
+                self._log_line(f"  {line}")
+
+    def _on_stderr(self):
+        data = bytes(self._proc.readAllStandardError()).decode(errors="replace")
+        for line in data.splitlines():
+            s = line.strip()
+            if s:
+                self._log_line(f"  {s}")
+
+    def _on_proc_finished(self, exit_code: int, _exit_status):
+        self._timer.stop()
+        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(errors="replace")
+        for line in self._stdout_buf.splitlines():
+            ln = line.strip()
+            if ln and not ln.startswith("WAVESCOPE_"):
+                self._log_line(f"  {ln}")
+        self._stdout_buf = ""
+
+        if exit_code != 0 and self._state == self._ST_SETUP:
+            self._log_line(f"✗  Setup/auth failed (exit {exit_code}). "
+                           "Check pkexec and iw are installed.")
+
+        try:
+            sz = os.path.getsize(self._output_path)
+            self._log_line(f"📁  Saved {sz / 1024:.1f} KB → {self._output_path}")
+        except OSError:
+            pass
+
+        self._set_state(self._ST_IDLE, "Idle — capture complete")
+        self._btn_start.setText("▶  Start Capture")
+        self._btn_start.setStyleSheet(
+            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            " border-radius:5px; font-size:11pt; font-weight:bold; }"
+            "QPushButton:hover { background:#226b33; }"
+            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+        )
+        self._btn_start.setEnabled(True)
+        try:
+            if self._master_script:
+                os.unlink(self._master_script)
+                self._master_script = ""
+        except OSError:
+            pass
+
+
+    def _request_stop(self):
+        if self._state in (self._ST_CAPTURE, self._ST_SETUP) and self._proc:
+            self._btn_start.setEnabled(False)
+            self._btn_start.setText("⏳  Stopping…")
+            self._log_line("⏹  Stopping capture — waiting for tcpdump to flush…")
+            self._proc.terminate()   # SIGTERM → bash trap → SIGINT → tcpdump exits cleanly
+            QTimer.singleShot(6000, self._force_kill_capture)
+
+    def _force_kill_capture(self):
+        from PyQt6.QtCore import QProcess
+        if self._state != self._ST_IDLE and self._proc and \
+                self._proc.state() != QProcess.ProcessState.NotRunning:
+            self._log_line("⚠  Process did not exit in time — force-killing…")
+            self._proc.kill()
+
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _make_process(self) -> "QProcess":
+        from PyQt6.QtCore import QProcess
+        p = QProcess(self)
+        p.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        return p
+
+    def _write_temp_script(self, body: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".sh", prefix="wavescope_")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(body)
+        os.chmod(path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP |
+                       stat.S_IROTH | stat.S_IXOTH)
+        return path
+
+    def _set_state(self, state: str, label: str):
+        self._state = state
+        self._lbl_state.setText(label)
+        idle = (state == self._ST_IDLE)
+        self._iface_combo.setEnabled(idle)
+        self._band_sel.setEnabled(idle)
+        self._chan_combo.setEnabled(idle)
+        self._out_edit.setEnabled(idle)
+        if state == self._ST_CAPTURE:
+            self._btn_start.setText("⏹  Stop Capture")
+            self._btn_start.setStyleSheet(
+                "QPushButton { background:#6b1a1a; color:#ffcccc; border:none;"
+                " border-radius:5px; font-size:11pt; font-weight:bold; }"
+                "QPushButton:hover { background:#7f2020; }"
+            )
+            self._btn_start.setEnabled(True)
+        elif state in (self._ST_SETUP, self._ST_TEARDOWN):
+            self._btn_start.setText("⏹  Stop Capture")
+            self._btn_start.setEnabled(state == self._ST_SETUP)
+        elif idle:
+            self._btn_start.setEnabled(True)
+
+    def _tick(self):
+        elapsed = int(time.monotonic() - self._start_time)
+        m, s = divmod(elapsed, 60)
+        self._lbl_elapsed.setText(f"{m:02d}:{s:02d}")
+        try:
+            sz = os.path.getsize(self._output_path)
+            if sz < 1024 * 1024:
+                self._lbl_size.setText(f"{sz / 1024:.1f} KB")
+            else:
+                self._lbl_size.setText(f"{sz / 1024 / 1024:.2f} MB")
+        except OSError:
+            self._lbl_size.setText("—")
+
+    def _log_line(self, text: str):
+        self._log.appendPlainText(text)
+        sb = self._log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def closeEvent(self, event):
+        if self._state != self._ST_IDLE:
+            from PyQt6.QtWidgets import QMessageBox
+            r = QMessageBox.question(
+                self, "Capture in progress",
+                "A capture is running. Stop it and restore the interface before closing?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if r == QMessageBox.StandardButton.Yes:
+                self._request_stop()
+                event.ignore()   # re-close after teardown finishes
+                # Reconnect to close after teardown
+                return
+            else:
+                event.ignore()
+                return
+        event.accept()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main Window
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1662,6 +2136,22 @@ class MainWindow(QMainWindow):
         self._btn_oui.setToolTip("Download / refresh the IEEE manufacturer database")
         self._btn_oui.clicked.connect(self._on_update_oui)
         tb.addWidget(self._btn_oui)
+
+        tb.addSeparator()
+
+        # Monitor mode button
+        self._btn_monitor = QPushButton("📡 Monitor Mode")
+        self._btn_monitor.setToolTip(
+            "Open packet-capture window (monitor mode)\n"
+            "Requires root — will temporarily disconnect WiFi"
+        )
+        self._btn_monitor.setStyleSheet(
+            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            " border-radius:3px; padding:2px 8px; }"
+            "QPushButton:hover { background:#1a2a40; }"
+        )
+        self._btn_monitor.clicked.connect(self._on_monitor_mode)
+        tb.addWidget(self._btn_monitor)
 
         tb.addSeparator()
 
@@ -1908,6 +2398,13 @@ class MainWindow(QMainWindow):
             self._scanner.start()
             self._btn_pause.setText("⏸ Pause")
             self.statusBar().showMessage("Resumed scanning…")
+
+    def _on_monitor_mode(self):
+        if not hasattr(self, "_monitor_win") or self._monitor_win is None:
+            self._monitor_win = MonitorModeWindow(parent=self)
+        self._monitor_win.show()
+        self._monitor_win.raise_()
+        self._monitor_win.activateWindow()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
