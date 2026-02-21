@@ -25,6 +25,10 @@ WaveScope is an open-source WiFi analyzer designed for Linux desktops. It gives 
 - ⚡ **Configurable refresh rate** — 1s to 30s
 - 🖱️ **Interactive graphs** — click labels to highlight, scroll to zoom, drag to pan
 - 🔎 **Filter & sort** — by any column, with text search
+- 📦 **Packet capture** — two modes available via the toolbar:
+  - **Monitor Mode**: raw 802.11 over-the-air capture of all frames on a chosen channel (all devices); temporarily disconnects WiFi, restored automatically on stop
+  - **Managed Mode**: capture your own machine's traffic without disconnecting from the network; WiFi stays connected throughout
+  - Both modes output standard `.pcap` files (Wireshark-compatible) and require a single root prompt
 
 ---
 
@@ -55,7 +59,7 @@ The installer will automatically create a Python virtual environment and install
 **System dependencies** (installed automatically as `.deb` dependencies):
 ```
 python3 (≥3.10), python3-pip, python3-venv,
-network-manager, iw,
+network-manager, iw, tcpdump, policykit-1,
 libxcb-cursor0, libxcb-xinerama0, libxcb-randr0
 ```
 
@@ -92,6 +96,8 @@ sudo dpkg -i wavescope_1.0.0_all.deb
 ### System
 - `nmcli` — provided by `network-manager`
 - `iw` — for enriched scan data (WiFi generation, exact dBm, BSS load, etc.)
+- `tcpdump` — required for packet capture (Monitor & Managed modes)
+- `pkexec` — provided by `policykit-1`; used for root privilege during packet capture
 
 ### Python packages (auto-installed by installer or `.deb`)
 - `PyQt6 >= 6.4.0`

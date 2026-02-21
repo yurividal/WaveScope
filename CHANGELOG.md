@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.2.0] – 2026-02-21
+
+### Added — Packet Capture
+
+- **Capture type picker**: clicking the toolbar "📡 Packet Capture" button now
+  opens a choice dialog with a clear description of each capture mode before
+  proceeding.
+
+- **Monitor Mode capture** (existing, now accessible via picker):
+  temporarily converts your WiFi interface to a raw 802.11 monitor interface
+  (`mon0`), capturing all over-the-air frames on a chosen band/channel from
+  every nearby device. Disconnects WiFi during capture; restores automatically
+  on stop.
+
+- **Managed Mode capture** (new):
+  captures only traffic to/from your own machine without disconnecting from
+  the network. WiFi stays fully connected throughout. Ideal for debugging your
+  own connection or logging your own traffic.
+
+- Both modes:
+  - Require a single root prompt (`pkexec` / Polkit) — not one per step
+  - Output standard `.pcap` files openable in Wireshark
+  - Show a live elapsed timer and file-size indicator
+  - Have a reliable **Stop** button backed by a dedicated cleanup script that
+    kills `tcpdump` by PID and tears down the interface, ensuring WiFi is
+    always restored even if the main capture process is unresponsive
+
+### Fixed
+
+- Stop button no longer leaves WiFi in an unusable state when `pkexec` fails to
+  forward signals to child processes (replaced signal-based stop with a dedicated
+  cleanup script).
+
+---
+
 ## [1.0.3] – 2026-02-21
 
 ### Fixed — 6 GHz (Wi-Fi 6E) channel graph
