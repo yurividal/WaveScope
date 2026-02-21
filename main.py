@@ -662,11 +662,11 @@ def _detect_wifi_iface() -> Optional[str]:
 
 
 _IW_GEN_COLORS = {
-    "WiFi 7":  "#FFD700",
-    "WiFi 6E": "#E040FB",
-    "WiFi 6":  "#448AFF",
-    "WiFi 5":  "#69F0AE",
-    "WiFi 4":  "#8BC34A",
+    "WiFi 7":  "#6A1B9A",   # deep purple
+    "WiFi 6E": "#AD1457",   # raspberry
+    "WiFi 6":  "#1565C0",   # royal blue
+    "WiFi 5":  "#00695C",   # dark teal
+    "WiFi 4":  "#2E7D32",   # dark green
 }
 
 
@@ -1710,14 +1710,51 @@ class MainWindow(QMainWindow):
 
         # Details tab (selected AP)
         self._details_widget = QWidget()
-        self._details_layout = QVBoxLayout(self._details_widget)
-        self._details_layout.setContentsMargins(12, 12, 12, 12)
-        self._details_label = QLabel("Select an access point to view details.")
-        self._details_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self._details_label.setTextFormat(Qt.TextFormat.RichText)
-        self._details_label.setWordWrap(True)
-        self._details_layout.addWidget(self._details_label)
-        self._details_layout.addStretch()
+        self._details_widget.setContentsMargins(0, 0, 0, 0)
+        _det_outer = QVBoxLayout(self._details_widget)
+        _det_outer.setContentsMargins(0, 0, 0, 0)
+        # SSID header label
+        self._det_ssid = QLabel("Select an access point to view details.")
+        self._det_ssid.setTextFormat(Qt.TextFormat.RichText)
+        self._det_ssid.setContentsMargins(20, 16, 20, 4)
+        _det_outer.addWidget(self._det_ssid)
+        # Separator line
+        _det_sep = QFrame()
+        _det_sep.setFrameShape(QFrame.Shape.HLine)
+        _det_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        _det_outer.addWidget(_det_sep)
+        # Form rows
+        _det_form_w = QWidget()
+        self._det_form = QFormLayout(_det_form_w)
+        self._det_form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._det_form.setHorizontalSpacing(18)
+        self._det_form.setVerticalSpacing(10)
+        self._det_form.setContentsMargins(20, 12, 20, 20)
+        _det_outer.addWidget(_det_form_w)
+        _det_outer.addStretch()
+        # pre-create value labels for each row
+        _DET_ROWS = [
+            "bssid", "manufacturer", "wifi_gen", "band", "channel",
+            "frequency", "chan_width", "country", "signal",
+            "max_rate", "security", "pmf", "chan_util", "clients",
+            "roaming", "mode",
+        ]
+        _DET_LABELS = [
+            "BSSID (MAC)", "Manufacturer", "WiFi Generation", "Band",
+            "Channel", "Frequency", "Channel Width", "Country", "Signal",
+            "Max Rate", "Security", "PMF (802.11w)", "Channel Util",
+            "Clients", "Roaming (k/v/r)", "Mode",
+        ]
+        self._det_vals: dict[str, QLabel] = {}
+        for key, lbl_text in zip(_DET_ROWS, _DET_LABELS):
+            lbl = QLabel(f"<b>{lbl_text}</b>")
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            val = QLabel("—")
+            val.setTextFormat(Qt.TextFormat.RichText)
+            val.setWordWrap(True)
+            self._det_vals[key] = val
+            self._det_form.addRow(lbl, val)
         _details_scroll = QScrollArea()
         _details_scroll.setWidgetResizable(True)
         _details_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -1839,7 +1876,9 @@ class MainWindow(QMainWindow):
     def _on_selection_change(self, selected, deselected):
         indexes = self._table.selectionModel().selectedRows()
         if not indexes:
-            self._details_label.setText("Select an access point in the table to view details.")
+            self._det_ssid.setText("<span style='font-size:15px;color:#777'>Select an access point to view details.</span>")
+            for v in self._det_vals.values():
+                v.setText("—")
             self._history_graph.filter_bssids(None)
             self._channel_graph.highlight_bssid(None)
             return
@@ -1944,86 +1983,80 @@ class MainWindow(QMainWindow):
         self._refresh_filter_badge()
 
     def _show_details(self, ap: AccessPoint):
-        color    = self._model.ssid_colors().get(ap.ssid, QColor("#888888")).name()
-        sig_col  = signal_color(ap.signal).name()
-        in_use_badge = ('<span style="background:#4caf50;color:white;padding:2px '
-                        '6px;border-radius:3px"> ▲ CONNECTED </span>') if ap.in_use else ""
+        color   = self._model.ssid_colors().get(ap.ssid, QColor("#888888")).name()
+        sig_col = signal_color(ap.signal).name()
 
-        def row(label, value):
-            return (f'<tr><td style="padding:2px 12px 2px 0"><b>{label}</b></td>'
-                    f'<td>{value}</td></tr>')
+        def badge(text, bg, fg="white"):
+            return (f'<span style="background:{bg};color:{fg};padding:3px 10px;'
+                    f'border-radius:4px;font-size:13px;font-weight:500">{text}</span>')
 
-        def badge(text, bg):
-            return (f'<span style="background:{bg};color:white;padding:1px 5px;'
-                    f'border-radius:3px;font-size:11px">{text}</span>')
+        def dim(text):
+            return f"<span style='color:#777'>{text}</span>"
 
-        # Roaming support badges
-        kvr_html = ""
-        if ap.rrm: kvr_html += badge("802.11k", "#1565C0") + " "
-        if ap.btm: kvr_html += badge("802.11v", "#1565C0") + " "
-        if ap.ft:  kvr_html += badge("802.11r", "#1565C0") + " "
-        if not kvr_html: kvr_html = "<span style='color:#666'>None detected</span>"
+        # ── SSID header ───────────────────────────────────────────────────
+        in_use = (' &nbsp;<span style="background:#2e7d32;color:white;padding:2px 8px;'
+                  'border-radius:4px;font-size:13px"> ▲ CONNECTED </span>') if ap.in_use else ""
+        self._det_ssid.setText(
+            f'<span style="font-size:20px;font-weight:700;color:{color}">{ap.display_ssid}</span>{in_use}')
 
-        # WiFi gen
-        gen_color = _IW_GEN_COLORS.get(ap.wifi_gen, "#555")
-        gen_label = f"{ap.wifi_gen}  ·  {ap.protocol}" if ap.wifi_gen else ap.protocol
-        gen_html  = badge(gen_label, gen_color) if ap.wifi_gen else (
-                    f"<span style='color:#aaa'>{ap.protocol}</span>")
+        # ── WiFi generation ───────────────────────────────────────────────
+        gen_color = _IW_GEN_COLORS.get(ap.wifi_gen, "#37474F")
+        if ap.wifi_gen:
+            gen_html = badge(f"{ap.wifi_gen}  ·  {ap.protocol}", gen_color)
+        else:
+            gen_html = ap.protocol or dim("Unknown")
 
-        # Security
+        # ── Security ──────────────────────────────────────────────────────
         sec = ap.security_short
-        if sec == "Open":          sec_color = "#c62828"
-        elif "WPA3" in sec:        sec_color = "#2e7d32"
-        elif "WPA2" in sec:        sec_color = "#1565C0"
-        else:                      sec_color = "#555"
-        sec_html = badge(sec, sec_color)
+        if sec == "Open":      sec_html = badge(sec, "#b71c1c")
+        elif "WPA3" in sec:    sec_html = badge(sec, "#1b5e20")
+        elif "WPA2" in sec:    sec_html = badge(sec, "#0d47a1")
+        else:                  sec_html = badge(sec, "#37474F")
 
-        # PMF
-        pmf_colors = {"Required": "#2e7d32", "Optional": "#f57f17", "No": "#c62828"}
-        pmf_c = pmf_colors.get(ap.pmf)
-        pmf_html = badge(ap.pmf, pmf_c) if pmf_c else (ap.pmf or "<span style='color:#555'>Unknown</span>")
+        # ── PMF ───────────────────────────────────────────────────────────
+        pmf_map = {"Required": "#1b5e20", "Optional": "#e65100", "No": "#b71c1c"}
+        pmf_c = pmf_map.get(ap.pmf)
+        pmf_html = badge(ap.pmf, pmf_c) if pmf_c else dim(ap.pmf or "Unknown")
 
-        # Channel utilisation
+        # ── Channel utilisation ───────────────────────────────────────────
         util_pct = ap.chan_util_pct
         if util_pct is not None:
             if util_pct >= 75:   uc = "#f44336"
             elif util_pct >= 50: uc = "#ff9800"
             elif util_pct >= 25: uc = "#ffc107"
             else:                uc = "#4caf50"
-            util_html = f'<span style="color:{uc}"><b>{util_pct}%</b></span>'
+            util_html = f'<span style="color:{uc};font-size:15px;font-weight:700">{util_pct}%</span>'
         else:
-            util_html = "<span style='color:#555'>No BSS Load IE</span>"
+            util_html = dim("No BSS Load IE")
 
-        clients_html = (str(ap.station_count) if ap.station_count is not None
-                        else "<span style='color:#555'>Unknown</span>")
-        country_html = ap.country or "<span style='color:#555'>Unknown</span>"
+        # ── Roaming ───────────────────────────────────────────────────────
+        kvr_html = ""
+        if ap.rrm: kvr_html += badge("802.11k", "#1565C0") + "&nbsp; "
+        if ap.btm: kvr_html += badge("802.11v", "#1565C0") + "&nbsp; "
+        if ap.ft:  kvr_html += badge("802.11r", "#1565C0") + "&nbsp; "
+        if not kvr_html: kvr_html = dim("None detected")
 
-        html = f"""
-        <div style="font-family:'Inter','Segoe UI','Ubuntu','Noto Sans',sans-serif;
-                    font-size:14px;line-height:2.0">
-        <h2 style="color:{color};margin:0 0 8px 0;font-size:18px">{ap.display_ssid} {in_use_badge}</h2>
-        <table cellspacing="0" cellpadding="3">
-        {row("BSSID (MAC)",    ap.bssid)}
-        {row("Manufacturer",   ap.manufacturer)}
-        {row("WiFi Generation", gen_html)}
-        {row("Band",            ap.band)}
-        {row("Channel",         ap.channel)}
-        {row("Frequency",       f"{ap.freq_mhz} MHz")}
-        {row("Channel Width",   f"{ap.bandwidth_mhz} MHz")}
-        {row("Country",         country_html)}
-        {row("Signal",          f'<span style="color:{sig_col}">{ap.signal}% ({ap.dbm} dBm)</span>')}
-        {row("Max Rate",        f"{int(ap.rate_mbps)} Mbps")}
-        {row("Security",        sec_html)}
-        {row("PMF (802.11w)",   pmf_html)}
-        {row("Channel Util",    util_html)}
-        {row("Clients",         clients_html)}
-        {row("Roaming (k/v/r)", kvr_html)}
-        {row("Mode",            ap.mode)}
-        </table>
-        </div>
-        """
-        self._details_label.setText(html)
-
+        # ── Populate rows ─────────────────────────────────────────────────
+        v = self._det_vals
+        v["bssid"].setText(ap.bssid)
+        v["manufacturer"].setText(ap.manufacturer or dim("Unknown"))
+        v["wifi_gen"].setText(gen_html)
+        v["band"].setText(ap.band)
+        v["channel"].setText(str(ap.channel))
+        v["frequency"].setText(f"{ap.freq_mhz} MHz")
+        v["chan_width"].setText(f"{ap.bandwidth_mhz} MHz")
+        v["country"].setText(ap.country or dim("Unknown"))
+        v["signal"].setText(
+            f'<span style="color:{sig_col};font-size:15px;font-weight:700">'
+            f'{ap.signal}%&nbsp;</span>'
+            f'<span style="color:{sig_col}">({ap.dbm} dBm)</span>')
+        v["max_rate"].setText(f"{int(ap.rate_mbps)} Mbps")
+        v["security"].setText(sec_html)
+        v["pmf"].setText(pmf_html)
+        v["chan_util"].setText(util_html)
+        v["clients"].setText(str(ap.station_count) if ap.station_count is not None else dim("Unknown"))
+        v["roaming"].setText(kvr_html)
+        v["mode"].setText(ap.mode)
     def _prompt_oui_download(self):
         dlg = OuiDownloadDialog(self, first_run=True)
         dlg.exec()
