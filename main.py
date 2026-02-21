@@ -2934,8 +2934,17 @@ class ManagedCaptureWindow(QDialog):
         layout.addWidget(self._btn_start)
 
     def _populate_interfaces(self):
-        for iface in _detect_wifi_interfaces():
-            self._iface_combo.addItem(iface)
+        ifaces = _detect_wifi_interfaces()
+        self._iface_combo.clear()
+        if not ifaces:
+            self._iface_combo.addItem("No WiFi interfaces found")
+            self._btn_start.setEnabled(False)
+            return
+        for ifc in ifaces:
+            label = ifc["name"]
+            if ifc["connected_ssid"]:
+                label += f"  (connected: {ifc['connected_ssid']})"
+            self._iface_combo.addItem(label, ifc["name"])
 
     def _browse_output(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -2955,7 +2964,7 @@ class ManagedCaptureWindow(QDialog):
             self._request_stop()
 
     def _start_capture(self):
-        iface  = self._iface_combo.currentText().strip()
+        iface  = (self._iface_combo.currentData() or self._iface_combo.currentText()).strip()
         output = self._out_edit.text().strip()
         if not iface:
             QMessageBox.warning(self, "No Interface", "Select a WiFi interface.")
