@@ -21,7 +21,7 @@ from typing import Optional, List, Dict, Tuple
 import numpy as np
 
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QSplitter, QTableView, QHeaderView, QAbstractItemView,
     QToolBar, QLabel, QComboBox, QPushButton, QStatusBar,
     QFrame, QSizePolicy, QLineEdit, QTabWidget, QCheckBox,
@@ -46,7 +46,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120   # seconds of signal history to keep
