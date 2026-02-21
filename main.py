@@ -2199,6 +2199,128 @@ ip link set "$IFACE" up 2>/dev/null || true
 {nm_start}echo "WAVESCOPE_CLEANUP_OK"
 """
 
+_MANAGED_CAPTURE_TMPL = """\
+#!/bin/bash
+# Managed-mode capture — WiFi stays connected; only your machine's traffic.
+IFACE={iface}
+OUTPUT={output}
+PID_FILE={pid_file}
+
+tcpdump -i "$IFACE" -e -nn -U -w "$OUTPUT" &
+TDPID=$!
+echo "$TDPID" > "$PID_FILE"
+echo "WAVESCOPE_CAPTURE_OK"
+wait "$TDPID"
+rm -f "$PID_FILE" 2>/dev/null
+echo "WAVESCOPE_CAPTURE_DONE"
+"""
+
+_MANAGED_CLEANUP_TMPL = """\
+#!/bin/bash
+# Clean stop — sends SIGINT to tcpdump so it flushes the pcap properly.
+PID_FILE={pid_file}
+
+if [[ -f "$PID_FILE" ]]; then
+    TDPID=$(cat "$PID_FILE")
+    kill -INT "$TDPID" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$TDPID" 2>/dev/null || true
+    rm -f "$PID_FILE"
+fi
+echo "WAVESCOPE_CLEANUP_OK"
+"""
+
+class CaptureTypeDialog(QDialog):
+    """Small picker — user chooses between Monitor Mode and Managed Mode capture."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("\U0001f4e1  Packet Capture")
+        self.setModal(True)
+        self.setMinimumWidth(580)
+        self._choice = None
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(20, 18, 20, 18)
+
+        title = QLabel("Choose capture type")
+        title.setStyleSheet("font-size:13pt; font-weight:bold; color:#e0e0e0;")
+        layout.addWidget(title)
+
+        note = QLabel("Both modes require a root password prompt (pkexec / Polkit).")
+        note.setStyleSheet("font-size:9pt; color:#888;")
+        layout.addWidget(note)
+        layout.addSpacing(4)
+
+        btn_mon = self._make_card(
+            "\U0001f4e1  Monitor Mode",
+            "True 802.11 over-the-air capture — all devices, all frames",
+            "Disconnects your WiFi and creates a raw monitor interface (mon0).\n"
+            "Captures ALL frames on the chosen channel — beacons, probes, data\n"
+            "from every nearby device. Best for deep wireless analysis.",
+            "#1a3050", "#1e4a80",
+        )
+        btn_mon.clicked.connect(lambda: self._pick("monitor"))
+        layout.addWidget(btn_mon)
+
+        btn_mgd = self._make_card(
+            "\U0001f310  Managed Mode",
+            "Capture your own machine's traffic — WiFi stays connected",
+            "Keeps your WiFi connection intact. Captures only traffic\n"
+            "to/from this machine on the current network.\n"
+            "Ideal for debugging your own connection without losing internet.",
+            "#1a3a1a", "#1e5a22",
+        )
+        btn_mgd.clicked.connect(lambda: self._pick("managed"))
+        layout.addWidget(btn_mgd)
+
+        layout.addSpacing(4)
+        cancel = QPushButton("Cancel")
+        cancel.setFixedWidth(90)
+        cancel.clicked.connect(self.reject)
+        hbox = QHBoxLayout()
+        hbox.addStretch()
+        hbox.addWidget(cancel)
+        layout.addLayout(hbox)
+
+    def _make_card(self, title, subtitle, body, bg, hover):
+        btn = QPushButton()
+        btn.setSizePolicy(btn.sizePolicy().horizontalPolicy(),
+                          btn.sizePolicy().verticalPolicy())
+        btn.setMinimumHeight(110)
+        btn.setStyleSheet(
+            f"QPushButton {{ background:{bg}; color:#d8e8ff; border:1px solid #334;"
+            f" border-radius:8px; text-align:left; padding:12px 14px; font-size:10pt; }}"
+            f"QPushButton:hover {{ background:{hover}; border:1px solid #558; }}"
+        )
+        inner = QVBoxLayout(btn)
+        inner.setContentsMargins(4, 4, 4, 4)
+        inner.setSpacing(3)
+        lbl_t = QLabel(title)
+        lbl_t.setStyleSheet("font-size:12pt; font-weight:bold; color:#ffffff;")
+        lbl_t.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        lbl_s = QLabel(subtitle)
+        lbl_s.setStyleSheet("font-size:9.5pt; color:#aad4ff; font-style:italic;")
+        lbl_s.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        lbl_b = QLabel(body)
+        lbl_b.setStyleSheet("font-size:9pt; color:#b0c8d8; margin-top:4px;")
+        lbl_b.setWordWrap(True)
+        lbl_b.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        inner.addWidget(lbl_t)
+        inner.addWidget(lbl_s)
+        inner.addWidget(lbl_b)
+        return btn
+
+    def _pick(self, choice: str):
+        self._choice = choice
+        self.accept()
+
+    def chosen(self):
+        return self._choice
+
 
 class MonitorModeWindow(QDialog):
     """
@@ -2541,7 +2663,9 @@ class MonitorModeWindow(QDialog):
         if self._state in (self._ST_CAPTURE, self._ST_SETUP) and self._proc:
             self._btn_start.setEnabled(False)
             self._btn_start.setText("⏳  Stopping…")
-            self._log_line("⏹  Stopping — launching cleanup (a password prompt may appear)…")
+            self._log_line(
+                "⏹  Stopping — launching cleanup (a password prompt may appear)…"
+            )
             self._set_state(self._ST_TEARDOWN, "Stopping…")
             self._run_cleanup()
             # Last-resort force-kill if cleanup pkexec itself hangs
@@ -2565,7 +2689,9 @@ class MonitorModeWindow(QDialog):
         self._log_line("▶  Cleanup running…")
 
     def _on_cleanup_stdout(self):
-        data = bytes(self._cleanup_proc.readAllStandardOutput()).decode(errors="replace")
+        data = bytes(self._cleanup_proc.readAllStandardOutput()).decode(
+            errors="replace"
+        )
         for line in data.splitlines():
             ln = line.strip()
             if ln == "WAVESCOPE_CLEANUP_OK":
@@ -2600,7 +2726,9 @@ class MonitorModeWindow(QDialog):
             and self._proc
             and self._proc.state() != QProcess.ProcessState.NotRunning
         ):
-            self._log_line("⚠  Still running after 20 s — force-killing master process…")
+            self._log_line(
+                "⚠  Still running after 20 s — force-killing master process…"
+            )
             self._proc.kill()
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -2681,6 +2809,347 @@ class MonitorModeWindow(QDialog):
                 event.ignore()
                 return
         event.accept()
+
+
+class ManagedCaptureWindow(QDialog):
+    """
+    Managed-mode packet capture — WiFi stays connected.
+    Only captures traffic to/from this machine. Requires root via pkexec.
+    """
+
+    _ST_IDLE    = "idle"
+    _ST_CAPTURE = "capture"
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("\U0001f310  Managed Capture  \u2014  Packet Capture")
+        self.setMinimumSize(560, 540)
+        self.setModal(False)
+
+        self._state          = self._ST_IDLE
+        self._proc           = None
+        self._cleanup_proc   = None
+        self._capture_script = ""
+        self._pid_file       = ""
+        self._stdout_buf     = ""
+        self._start_time     = 0.0
+        self._timer          = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick)
+        self._iface_name     = ""
+        self._output_path    = ""
+
+        self._build_ui()
+        self._populate_interfaces()
+
+    # ── UI ────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+        layout.setContentsMargins(16, 14, 16, 14)
+
+        banner = QLabel(
+            "\u2139  Your WiFi connection stays active. Only traffic to/from "
+            "this machine is captured."
+        )
+        banner.setWordWrap(True)
+        banner.setStyleSheet(
+            "background:#1e2e10; color:#cceeaa; padding:8px 10px;"
+            " border-radius:5px; font-size:9pt;"
+        )
+        layout.addWidget(banner)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self._iface_combo = QComboBox()
+        form.addRow("Interface:", self._iface_combo)
+
+        out_row = QHBoxLayout()
+        self._out_edit = QLineEdit(
+            os.path.expanduser(f"~/Desktop/managed_{int(time.time())}.pcap")
+        )
+        btn_browse = QPushButton("Browse\u2026")
+        btn_browse.setFixedWidth(80)
+        btn_browse.clicked.connect(self._browse_output)
+        out_row.addWidget(self._out_edit)
+        out_row.addWidget(btn_browse)
+        form.addRow("Output file:", out_row)
+        layout.addLayout(form)
+
+        status_row = QHBoxLayout()
+        self._lbl_state   = QLabel("Idle")
+        self._lbl_elapsed = QLabel("00:00")
+        self._lbl_size    = QLabel("File:  0 KB")
+        self._lbl_state.setStyleSheet("color:#88bb88; font-weight:bold;")
+        status_row.addWidget(self._lbl_state)
+        status_row.addStretch()
+        status_row.addWidget(QLabel("Elapsed:"))
+        status_row.addWidget(self._lbl_elapsed)
+        status_row.addSpacing(12)
+        status_row.addWidget(self._lbl_size)
+        layout.addLayout(status_row)
+
+        self._log = QTextEdit()
+        self._log.setReadOnly(True)
+        self._log.setStyleSheet(
+            "background:#0e1a0e; color:#a0d8a0; font-family:monospace;"
+            " font-size:9pt; border-radius:4px;"
+        )
+        layout.addWidget(self._log, 1)
+
+        self._btn_start = QPushButton("\u25b6  Start Capture")
+        self._btn_start.setMinimumHeight(42)
+        self._btn_start.setStyleSheet(
+            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            " border-radius:5px; font-size:11pt; font-weight:bold; }"
+            "QPushButton:hover { background:#226b33; }"
+            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+        )
+        self._btn_start.clicked.connect(self._on_btn)
+        layout.addWidget(self._btn_start)
+
+    def _populate_interfaces(self):
+        for iface in _detect_wifi_interfaces():
+            self._iface_combo.addItem(iface)
+
+    def _browse_output(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Capture File",
+            os.path.expanduser("~/Desktop"),
+            "PCAP files (*.pcap);;All files (*)",
+        )
+        if path:
+            self._out_edit.setText(path)
+
+    # ── Capture lifecycle ─────────────────────────────────────────────────
+
+    def _on_btn(self):
+        if self._state == self._ST_IDLE:
+            self._start_capture()
+        else:
+            self._request_stop()
+
+    def _start_capture(self):
+        iface  = self._iface_combo.currentText().strip()
+        output = self._out_edit.text().strip()
+        if not iface:
+            QMessageBox.warning(self, "No Interface", "Select a WiFi interface.")
+            return
+        if not output:
+            QMessageBox.warning(self, "No Output", "Choose an output file.")
+            return
+        self._iface_name  = iface
+        self._output_path = output
+        self._log.clear()
+        self._log_line(f"Interface : {iface}")
+        self._log_line(f"Output    : {output}")
+        self._log_line("\u2500" * 50)
+        self._run_capture()
+
+    def _run_capture(self):
+        import tempfile as _tf
+        self._pid_file = _tf.mktemp(prefix="wavescope_tdpid_", suffix=".pid")
+        script_body = _MANAGED_CAPTURE_TMPL.format(
+            iface=self._iface_name,
+            output=self._output_path,
+            pid_file=self._pid_file,
+        )
+        self._capture_script = self._write_temp_script(script_body)
+        self._stdout_buf = ""
+        self._proc = self._make_process()
+        self._proc.readyReadStandardOutput.connect(self._on_stdout)
+        self._proc.readyReadStandardError.connect(self._on_stderr)
+        self._proc.finished.connect(self._on_proc_finished)
+        self._proc.start("pkexec", ["bash", self._capture_script])
+        self._set_state(self._ST_CAPTURE, "Starting\u2026")
+        self._btn_start.setText("\u23f9  Stop Capture")
+        self._btn_start.setStyleSheet(
+            "QPushButton { background:#6b1a1a; color:#ffcccc; border:none;"
+            " border-radius:5px; font-size:11pt; font-weight:bold; }"
+            "QPushButton:hover { background:#7f2020; }"
+        )
+        self._log_line("\u25b6  Starting (Polkit authentication may appear\u2026)")
+
+    def _on_stdout(self):
+        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(errors="replace")
+        while "\n" in self._stdout_buf:
+            line, self._stdout_buf = self._stdout_buf.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            if line == "WAVESCOPE_CAPTURE_OK":
+                self._log_line("\u2713  tcpdump running \u2014 WiFi connection is intact.")
+                self._set_state(self._ST_CAPTURE, "Capturing\u2026")
+                self._start_time = time.monotonic()
+                self._timer.start()
+                self._log_line("\u25b6  Click Stop to end capture.")
+            elif line == "WAVESCOPE_CAPTURE_DONE":
+                self._log_line("\u2713  Capture complete.")
+            else:
+                self._log_line(f"  {line}")
+
+    def _on_stderr(self):
+        data = bytes(self._proc.readAllStandardError()).decode(errors="replace")
+        for line in data.splitlines():
+            s = line.strip()
+            if s:
+                self._log_line(f"  {s}")
+
+    def _on_proc_finished(self, exit_code: int, _exit_status):
+        self._timer.stop()
+        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(errors="replace")
+        for line in self._stdout_buf.splitlines():
+            ln = line.strip()
+            if ln and not ln.startswith("WAVESCOPE_"):
+                self._log_line(f"  {ln}")
+        self._stdout_buf = ""
+        if exit_code != 0 and self._state == self._ST_CAPTURE:
+            self._log_line(
+                f"\u2717  Capture failed (exit {exit_code}). Check pkexec is available."
+            )
+        if self._state != self._ST_IDLE:
+            self._reset_ui_to_idle("Idle \u2014 capture complete")
+        self._cleanup_temps()
+
+    def _request_stop(self):
+        if self._state == self._ST_CAPTURE and self._proc:
+            self._btn_start.setEnabled(False)
+            self._btn_start.setText("\u23f3  Stopping\u2026")
+            self._log_line(
+                "\u23f9  Stopping \u2014 launching cleanup (a password prompt may appear)\u2026"
+            )
+            self._run_cleanup()
+            QTimer.singleShot(20000, self._force_kill)
+
+    def _run_cleanup(self):
+        script_body = _MANAGED_CLEANUP_TMPL.format(pid_file=self._pid_file)
+        cleanup_path = self._write_temp_script(script_body)
+        self._cleanup_proc = self._make_process()
+        self._cleanup_proc.readyReadStandardOutput.connect(self._on_cleanup_stdout)
+        self._cleanup_proc.readyReadStandardError.connect(self._on_cleanup_stderr)
+        self._cleanup_proc.finished.connect(
+            lambda code, _s, p=cleanup_path: self._on_cleanup_finished(code, p)
+        )
+        self._cleanup_proc.start("pkexec", ["bash", cleanup_path])
+        self._log_line("\u25b6  Cleanup running\u2026")
+
+    def _on_cleanup_stdout(self):
+        data = bytes(self._cleanup_proc.readAllStandardOutput()).decode(errors="replace")
+        for line in data.splitlines():
+            ln = line.strip()
+            if ln == "WAVESCOPE_CLEANUP_OK":
+                self._log_line("\u2713  Capture stopped cleanly.")
+            elif ln:
+                self._log_line(f"  {ln}")
+
+    def _on_cleanup_stderr(self):
+        data = bytes(self._cleanup_proc.readAllStandardError()).decode(errors="replace")
+        for line in data.splitlines():
+            s = line.strip()
+            if s:
+                self._log_line(f"  {s}")
+
+    def _on_cleanup_finished(self, exit_code: int, cleanup_path: str):
+        try:
+            os.unlink(cleanup_path)
+        except OSError:
+            pass
+        self._cleanup_proc = None
+        if exit_code != 0:
+            self._log_line(f"\u26a0  Cleanup exited with code {exit_code}.")
+        if self._state != self._ST_IDLE:
+            self._reset_ui_to_idle("Idle \u2014 capture stopped")
+        self._cleanup_temps()
+
+    def _force_kill(self):
+        from PyQt6.QtCore import QProcess
+        if (
+            self._state != self._ST_IDLE
+            and self._proc
+            and self._proc.state() != QProcess.ProcessState.NotRunning
+        ):
+            self._log_line("\u26a0  Still running after 20 s \u2014 force-killing\u2026")
+            self._proc.kill()
+
+    # ── Helpers ───────────────────────────────────────────────────────────
+
+    def _reset_ui_to_idle(self, label: str = "Idle"):
+        self._set_state(self._ST_IDLE, label)
+        self._btn_start.setText("\u25b6  Start Capture")
+        self._btn_start.setStyleSheet(
+            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            " border-radius:5px; font-size:11pt; font-weight:bold; }"
+            "QPushButton:hover { background:#226b33; }"
+            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+        )
+        self._btn_start.setEnabled(True)
+        try:
+            sz = os.path.getsize(self._output_path)
+            self._log_line(
+                f"\U0001f4c1  Saved {sz / 1024:.1f} KB \u2192 {self._output_path}"
+            )
+        except OSError:
+            pass
+
+    def _cleanup_temps(self):
+        for attr in ("_capture_script", "_pid_file"):
+            path = getattr(self, attr, "")
+            if path:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+                setattr(self, attr, "")
+
+    def _set_state(self, state: str, label: str):
+        self._state = state
+        self._lbl_state.setText(label)
+        idle = state == self._ST_IDLE
+        self._iface_combo.setEnabled(idle)
+        self._out_edit.setEnabled(idle)
+
+    def _tick(self):
+        elapsed = int(time.monotonic() - self._start_time)
+        m, s = divmod(elapsed, 60)
+        self._lbl_elapsed.setText(f"{m:02d}:{s:02d}")
+        try:
+            sz = os.path.getsize(self._output_path)
+            if sz < 1024 * 1024:
+                self._lbl_size.setText(f"File:  {sz / 1024:.1f} KB")
+            else:
+                self._lbl_size.setText(f"File:  {sz / 1024 / 1024:.2f} MB")
+        except OSError:
+            pass
+
+    def _log_line(self, text: str):
+        self._log.append(text)
+        sb = self._log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def _make_process(self):
+        from PyQt6.QtCore import QProcess
+        p = QProcess(self)
+        p.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
+        return p
+
+    def _write_temp_script(self, body: str) -> str:
+        fd, path = tempfile.mkstemp(suffix=".sh", prefix="wavescope_")
+        with os.fdopen(fd, "w") as fh:
+            fh.write(body)
+        os.chmod(
+            path,
+            stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH,
+        )
+        return path
+
+    def closeEvent(self, event):
+        if self._state != self._ST_IDLE:
+            self._request_stop()
+            event.ignore()
+        else:
+            event.accept()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2769,7 +3238,7 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         # Monitor mode button
-        self._btn_monitor = QPushButton("📡 Monitor Mode")
+        self._btn_monitor = QPushButton("📡 Packet Capture")
         self._btn_monitor.setToolTip(
             "Open packet-capture window (monitor mode)\n"
             "Requires root — will temporarily disconnect WiFi"
@@ -3071,11 +3540,22 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Resumed scanning…")
 
     def _on_monitor_mode(self):
-        if not hasattr(self, "_monitor_win") or self._monitor_win is None:
-            self._monitor_win = MonitorModeWindow(parent=self)
-        self._monitor_win.show()
-        self._monitor_win.raise_()
-        self._monitor_win.activateWindow()
+        picker = CaptureTypeDialog(parent=self)
+        if picker.exec() != QDialog.DialogCode.Accepted:
+            return
+        choice = picker.chosen()
+        if choice == "monitor":
+            if not hasattr(self, "_monitor_win") or self._monitor_win is None:
+                self._monitor_win = MonitorModeWindow(parent=self)
+            self._monitor_win.show()
+            self._monitor_win.raise_()
+            self._monitor_win.activateWindow()
+        elif choice == "managed":
+            if not hasattr(self, "_managed_win") or self._managed_win is None:
+                self._managed_win = ManagedCaptureWindow(parent=self)
+            self._managed_win.show()
+            self._managed_win.raise_()
+            self._managed_win.activateWindow()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
