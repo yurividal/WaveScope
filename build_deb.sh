@@ -35,7 +35,7 @@ Package: $PKGNAME
 Version: $VERSION
 Architecture: $ARCH
 Maintainer: WaveScope Contributors <https://github.com/yurividal/WaveScope>
-Depends: python3 (>= 3.10), python3-pip, python3-venv, network-manager, iw, libxcb-cursor0, libxcb-xinerama0, libxcb-randr0
+Depends: python3 (>= 3.10), python3-pip, python3-venv, network-manager, iw, tcpdump, policykit-1, libxcb-cursor0, libxcb-xinerama0, libxcb-randr0
 Recommends: python3-pyqt6
 Section: net
 Priority: optional
