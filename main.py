@@ -2287,32 +2287,52 @@ class CaptureTypeDialog(QDialog):
         layout.addLayout(hbox)
 
     def _make_card(self, title, subtitle, body, bg, hover):
-        btn = QPushButton()
-        btn.setSizePolicy(btn.sizePolicy().horizontalPolicy(),
-                          btn.sizePolicy().verticalPolicy())
-        btn.setMinimumHeight(110)
-        btn.setStyleSheet(
-            f"QPushButton {{ background:{bg}; color:#d8e8ff; border:1px solid #334;"
-            f" border-radius:8px; text-align:left; padding:12px 14px; font-size:10pt; }}"
-            f"QPushButton:hover {{ background:{hover}; border:1px solid #558; }}"
-        )
-        inner = QVBoxLayout(btn)
-        inner.setContentsMargins(4, 4, 4, 4)
+        # Use a QFrame subclass — embedding QLabels inside QPushButton
+        # makes click detection unreliable in Qt6.
+        class _Card(QFrame):
+            clicked = pyqtSignal()
+
+            def __init__(self, bg, hover):
+                super().__init__()
+                self._bg    = bg
+                self._hover = hover
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.setMinimumHeight(110)
+                self._apply_style(bg)
+
+            def _apply_style(self, color):
+                self.setStyleSheet(
+                    f"QFrame {{ background:{color}; border:1px solid #334;"
+                    f" border-radius:8px; }}"
+                )
+
+            def enterEvent(self, _e):
+                self._apply_style(self._hover)
+
+            def leaveEvent(self, _e):
+                self._apply_style(self._bg)
+
+            def mousePressEvent(self, e):
+                if e.button() == Qt.MouseButton.LeftButton:
+                    self.clicked.emit()
+
+        card = _Card(bg, hover)
+        inner = QVBoxLayout(card)
+        inner.setContentsMargins(14, 12, 14, 12)
         inner.setSpacing(3)
         lbl_t = QLabel(title)
         lbl_t.setStyleSheet("font-size:12pt; font-weight:bold; color:#ffffff;")
-        lbl_t.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         lbl_s = QLabel(subtitle)
         lbl_s.setStyleSheet("font-size:9.5pt; color:#aad4ff; font-style:italic;")
-        lbl_s.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         lbl_b = QLabel(body)
         lbl_b.setStyleSheet("font-size:9pt; color:#b0c8d8; margin-top:4px;")
         lbl_b.setWordWrap(True)
-        lbl_b.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        for lbl in (lbl_t, lbl_s, lbl_b):
+            lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         inner.addWidget(lbl_t)
         inner.addWidget(lbl_s)
         inner.addWidget(lbl_b)
-        return btn
+        return card
 
     def _pick(self, choice: str):
         self._choice = choice
