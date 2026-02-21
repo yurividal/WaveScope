@@ -52,6 +52,9 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QMessageBox,
     QToolTip,
+    QTextEdit,
+    QFileDialog,
+    QPlainTextEdit,
 )
 from PyQt6.QtCore import (
     Qt,
