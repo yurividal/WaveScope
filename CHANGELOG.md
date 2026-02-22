@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.5.1 — 2026-02-22
+
+### Highlights
+- Added AppImage build support in GitHub Actions release workflow.
+- Added Docker-based AppImage build path so AppImage can be built without host `appimagetool`.
+- Moved package build scripts into `scripts/` (`build_deb.sh`, `build_rpm.sh`, `build_appimage.sh`) and updated references.
+- Added AppImage build artifacts to `.gitignore`.
+
 ## v1.5.0 — 2026-02-22
 
 ### Highlights

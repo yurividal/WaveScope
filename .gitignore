@@ -2,8 +2,12 @@
 __pycache__/
 *.py[cod]
 *.deb
+*.AppImage
+appimagetool-*.AppImage
 _deb_build/
 _rpm_build/
+_appimage_build/
+squashfs-root/
 *.egg-info/
 dist/
 build/

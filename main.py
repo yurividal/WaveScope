@@ -97,7 +97,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -1698,7 +1698,7 @@ class APTableModel(QAbstractTableModel):
                 COL_UTIL,
                 COL_CLIENTS,
             }
-            if col in numeric_cols or col == COL_KVR:
+            if col in numeric_cols or col == COL_KVR or col == COL_COUNTRY:
                 return Qt.AlignmentFlag.AlignCenter
             return Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
 

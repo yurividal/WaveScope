@@ -95,6 +95,19 @@ chmod +x install.sh
 ./wavescope
 ```
 
+### Option D — AppImage
+
+Download the latest `.AppImage` from the [Releases](https://github.com/yurividal/WaveScope/releases) page:
+
+```bash
+chmod +x WaveScope-*.AppImage
+./WaveScope-*.AppImage
+```
+
+Notes:
+- AppImage bundles Python + Python dependencies.
+- `nmcli`, `iw`, and `tcpdump` are still expected on the host system.
+
 ---
 
 ## Build packages from source
@@ -103,8 +116,8 @@ chmod +x install.sh
 
 ```bash
 # Requires: dpkg-dev
-chmod +x build_deb.sh
-./build_deb.sh
+chmod +x scripts/build_deb.sh
+./scripts/build_deb.sh
 sudo dpkg -i wavescope_*.deb
 ```
 
@@ -113,9 +126,32 @@ sudo dpkg -i wavescope_*.deb
 ```bash
 # Requires: rpm-build
 # sudo dnf install rpm-build
-chmod +x build_rpm.sh
-./build_rpm.sh
+chmod +x scripts/build_rpm.sh
+./scripts/build_rpm.sh
 sudo dnf install ./wavescope_*.rpm
+```
+
+### AppImage
+
+```bash
+# Requires: appimagetool
+# (Download from AppImageKit releases or install from your distro if available)
+chmod +x scripts/build_appimage.sh
+./scripts/build_appimage.sh
+
+chmod +x WaveScope-*.AppImage
+./WaveScope-*.AppImage
+```
+
+### AppImage (Docker, no host appimagetool needed)
+
+```bash
+# Requires: docker
+chmod +x build_appimage_docker.sh
+./build_appimage_docker.sh
+
+chmod +x WaveScope-*.AppImage
+./WaveScope-*.AppImage
 ```
 
 ---

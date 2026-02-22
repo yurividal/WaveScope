@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build_rpm.sh — Build an .rpm package for WaveScope
-# Usage: ./build_rpm.sh [version]
-# Example: ./build_rpm.sh 1.3.1
+# Usage: ./scripts/build_rpm.sh [version]
+# Example: ./scripts/build_rpm.sh 1.3.1
 #
 # Requires: rpm-build
 #   Fedora/RHEL:  sudo dnf install rpm-build

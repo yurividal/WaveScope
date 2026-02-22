@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build_deb.sh — Build a .deb package for WaveScope
-# Usage: ./build_deb.sh [version]
-# Example: ./build_deb.sh 1.0.0
+# Usage: ./scripts/build_deb.sh [version]
+# Example: ./scripts/build_deb.sh 1.0.0
 set -euo pipefail
 
 VERSION="${1:-$(grep -m1 'VERSION' main.py | grep -oP '\"[0-9]+\.[0-9]+\.[0-9]+\"' | tr -d '"')}"
