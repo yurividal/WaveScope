@@ -8,3 +8,4 @@ _rpm_build/
 dist/
 build/
 .DS_Store
+Vendors/

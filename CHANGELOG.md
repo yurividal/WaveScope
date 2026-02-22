@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.0 — 2026-02-22
+
+### Highlights
+- Improved vendor matching for difficult MAC addresses (including locally-administered / transformed BSSIDs).
+- Added WPS-based vendor detection from `iw` scan data when available.
+- Added vendor icon support in the UI for recognized manufacturers.
+- Added manufacturer details in the Details tab, including source and raw WPS manufacturer value.
+- Updated bundled vendor assets (`vendors.json`, `vendor_urls.json`, and vendor icons) and added a sync script for vendor assets.
+
 ## v1.4.0 — 2026-02-22
 
 ### Highlights
@@ -8,7 +17,7 @@
 - Added DFS visual indication on 5 GHz so DFS channels are easier to identify.
 - Added 6 GHz bonded-channel lookup tables for more accurate center/span rendering.
 - Channel graph now preserves your zoom/pan view when data refreshes.
-- Switched offline manufacturer fallback to bundled `assets/oui.json` (downloaded database still preferred when available).
+- Switched offline manufacturer fallback to bundled `assets/vendors.json` (downloaded database still preferred when available).
 
 ## v1.3.1 — 2026-02-22
 

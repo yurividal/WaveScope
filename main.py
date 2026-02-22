@@ -60,13 +60,17 @@ from PyQt6.QtCore import (
     Qt,
     QTimer,
     QThread,
+    QItemSelectionModel,
+    QProcess,
     pyqtSignal,
     QSortFilterProxyModel,
     QAbstractTableModel,
     QModelIndex,
     QVariant,
     QPointF,
+    QRect,
     QRectF,
+    QSize,
     QPersistentModelIndex,
 )
 from PyQt6.QtGui import (
@@ -75,6 +79,7 @@ from PyQt6.QtGui import (
     QBrush,
     QPalette,
     QIcon,
+    QImage,
     QPixmap,
     QPainter,
     QPen,
@@ -92,7 +97,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -420,13 +425,101 @@ def signal_to_dbm(signal: int) -> int:
 
 _oui_full: Optional[Dict[str, str]] = None
 _oui_loaded = False
+_oui_suffix_unique_vendor: Optional[Dict[str, str]] = None
+_vendor_urls: Optional[Dict[str, str]] = None
+_vendor_urls_norm: Optional[Dict[str, str]] = None
+_vendor_urls_tokens: Optional[Dict[str, set[str]]] = None
+_vendor_urls_loaded = False
+_vendor_icon_cache: Dict[str, Optional[QIcon]] = {}
+_vendor_icon_placeholder: Optional[QIcon] = None
+VENDOR_ICON_MAX_W = 42
+VENDOR_ICON_MAX_H = 16
 
 # Path where we save the downloaded IEEE OUI database
 OUI_DATA_DIR = Path.home() / ".local" / "share" / "wavescope"
 OUI_JSON_PATH = OUI_DATA_DIR / "oui.json"
-OUI_EMBEDDED_JSON_PATH = Path(__file__).resolve().parent / "assets" / "oui.json"
+OUI_VENDOR_FALLBACK_JSON_PATH = (
+    Path(__file__).resolve().parent / "assets" / "vendors.json"
+)
+VENDOR_URLS_JSON_PATH = Path(__file__).resolve().parent / "assets" / "vendor_urls.json"
+VENDOR_ICONS_DIR = Path(__file__).resolve().parent / "assets" / "vendor-icons"
+VENDOR_ICON_EXTS = (".png", ".ico", ".svg", ".jpg", ".jpeg", ".webp", ".gif", ".bmp")
 OUI_IEEE_URL = "https://standards-oui.ieee.org/"
 OUI_IEEE_RE = re.compile(r"([0-9A-F]{2}-[0-9A-F]{2}-[0-9A-F]{2})\s+\(hex\)\s+(.+?)\n")
+
+
+def _norm_vendor_name(vendor: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (vendor or "").lower())
+
+
+_MANUF_DISPLAY_SUFFIXES = {
+    "inc",
+    "ltd",
+    "co",
+    "corp",
+    "llc",
+}
+
+
+def format_manufacturer_display(vendor: str) -> str:
+    """Display-only manufacturer cleanup; never modifies DB values."""
+    text = (vendor or "").strip()
+    if not text:
+        return ""
+    parts = [p for p in text.split() if p]
+    while parts:
+        tail = re.sub(r"[\.,]+$", "", parts[-1]).lower()
+        if tail in _MANUF_DISPLAY_SUFFIXES:
+            parts.pop()
+            continue
+        break
+    cleaned = " ".join(parts).strip(" ,")
+    return cleaned or text
+
+
+_VENDOR_NOISE_TOKENS = {
+    "inc",
+    "corp",
+    "corporation",
+    "company",
+    "co",
+    "co.",
+    "ltd",
+    "ltd.",
+    "limited",
+    "llc",
+    "gmbh",
+    "srl",
+    "spa",
+    "s.p.a",
+    "s.a",
+    "ag",
+    "nv",
+    "plc",
+    "group",
+    "systems",
+    "technology",
+    "technologies",
+    "electronics",
+    "communication",
+    "communications",
+    "network",
+    "networks",
+}
+
+
+def _vendor_tokens(vendor: str) -> set[str]:
+    tokens = set(re.findall(r"[a-z0-9]+", (vendor or "").lower()))
+    return {t for t in tokens if t and t not in _VENDOR_NOISE_TOKENS and len(t) > 1}
+
+
+def _norm_domain(domain: str) -> str:
+    d = (domain or "").strip().lower()
+    if d.startswith("https://"):
+        d = d[8:]
+    elif d.startswith("http://"):
+        d = d[7:]
+    return d.rstrip("/")
 
 
 def _load_downloaded_oui() -> Dict[str, str]:
@@ -442,16 +535,273 @@ def _load_downloaded_oui() -> Dict[str, str]:
 
 
 def _load_embedded_oui() -> Dict[str, str]:
-    """Load bundled OUI JSON from assets as offline fallback. Returns {} on failure."""
-    if not OUI_EMBEDDED_JSON_PATH.exists():
+    """Load bundled fallback DB from assets/vendors.json."""
+    if not OUI_VENDOR_FALLBACK_JSON_PATH.exists():
         return {}
     try:
         raw: Dict[str, str] = json.loads(
-            OUI_EMBEDDED_JSON_PATH.read_text(encoding="utf-8")
+            OUI_VENDOR_FALLBACK_JSON_PATH.read_text(encoding="utf-8")
         )
-        return {k.replace("-", ":").upper(): v for k, v in raw.items()}
+        return {k.replace("-", ":").upper(): v for k, v in raw.items() if v}
     except Exception:
         return {}
+
+
+def _load_oui_with_precedence() -> Dict[str, str]:
+    """Merge OUI DBs with precedence: embedded > downloaded > system."""
+    merged: Dict[str, str] = {}
+    merged.update(_load_system_oui())
+    merged.update(_load_downloaded_oui())
+    merged.update(_load_embedded_oui())
+    return merged
+
+
+def _build_unique_oui_suffix_vendor_index(oui_db: Dict[str, str]) -> Dict[str, str]:
+    """Build a conservative BB:CC -> vendor map from globally-administered OUIs.
+
+    We only keep suffixes that map to exactly one globally-administered OUI
+    prefix, to avoid broad false positives.
+    """
+    buckets: Dict[str, List[str]] = {}
+    for prefix, vendor in (oui_db or {}).items():
+        if not prefix or len(prefix) < 8 or not vendor:
+            continue
+        try:
+            first_octet = int(prefix[:2], 16)
+        except Exception:
+            continue
+        if first_octet & 0x02:
+            continue
+        suffix = prefix[3:8]
+        buckets.setdefault(suffix, []).append(prefix)
+
+    resolved: Dict[str, str] = {}
+    for suffix, prefixes in buckets.items():
+        if len(prefixes) != 1:
+            continue
+        only_prefix = prefixes[0]
+        vendor = (oui_db or {}).get(only_prefix, "")
+        if vendor:
+            resolved[suffix] = vendor
+    return resolved
+
+
+def _load_vendor_urls() -> Dict[str, str]:
+    if not VENDOR_URLS_JSON_PATH.exists():
+        return {}
+    try:
+        raw: Dict[str, str] = json.loads(
+            VENDOR_URLS_JSON_PATH.read_text(encoding="utf-8")
+        )
+        return {k.strip(): _norm_domain(v) for k, v in raw.items() if k and v}
+    except Exception:
+        return {}
+
+
+def _ensure_vendor_urls_loaded() -> None:
+    global _vendor_urls, _vendor_urls_norm, _vendor_urls_tokens, _vendor_urls_loaded
+    if _vendor_urls_loaded:
+        return
+    _vendor_urls = _load_vendor_urls()
+    _vendor_urls_norm = {}
+    _vendor_urls_tokens = {}
+    for name, domain in (_vendor_urls or {}).items():
+        key = _norm_vendor_name(name)
+        if key and key not in _vendor_urls_norm:
+            _vendor_urls_norm[key] = domain
+        _vendor_urls_tokens[name] = _vendor_tokens(name)
+    _vendor_urls_loaded = True
+
+
+def _resolve_vendor_domain(vendor_name: str) -> str:
+    _ensure_vendor_urls_loaded()
+    if not vendor_name:
+        return ""
+
+    if _vendor_urls:
+        direct = _vendor_urls.get(vendor_name, "")
+        if direct:
+            return direct
+
+    query_norm = _norm_vendor_name(vendor_name)
+    if not query_norm:
+        return ""
+
+    if _vendor_urls_norm:
+        exact = _vendor_urls_norm.get(query_norm, "")
+        if exact:
+            return exact
+
+    if _vendor_urls_norm:
+        contains_best = ""
+        contains_len = 0
+        for key, domain in _vendor_urls_norm.items():
+            if key and (key in query_norm or query_norm in key):
+                key_len = len(key)
+                if key_len > contains_len:
+                    contains_best = domain
+                    contains_len = key_len
+        if contains_best:
+            return contains_best
+
+    query_tokens = _vendor_tokens(vendor_name)
+    if not query_tokens or not _vendor_urls_tokens or not _vendor_urls:
+        return ""
+
+    best_name = ""
+    best_score = 0.0
+    best_overlap = 0
+    for name, tokens in _vendor_urls_tokens.items():
+        if not tokens:
+            continue
+        overlap = len(query_tokens & tokens)
+        if overlap == 0:
+            continue
+        score = overlap / max(1, len(tokens))
+        if score > best_score or (
+            abs(score - best_score) < 1e-9 and overlap > best_overlap
+        ):
+            best_name = name
+            best_score = score
+            best_overlap = overlap
+
+    if best_name and (best_score >= 0.60 or best_overlap >= 2):
+        return _vendor_urls.get(best_name, "")
+    return ""
+
+
+def _resolve_vendor_icon_path(vendor_name: str) -> Optional[Path]:
+    domain = _resolve_vendor_domain(vendor_name)
+    if not domain:
+        return None
+
+    base_names = [domain, f"www.{domain}"]
+    if domain.startswith("www."):
+        base_names.append(domain[4:])
+
+    candidates: List[Path] = []
+    for base in base_names:
+        for ext in VENDOR_ICON_EXTS:
+            candidates.append(VENDOR_ICONS_DIR / f"{base}{ext}")
+
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _build_vendor_icon(path: Path) -> Optional[QIcon]:
+    # Prefer QIcon pixmap selection first so containers like .ico can pick
+    # the best embedded frame for our target size.
+    target_w = VENDOR_ICON_MAX_W
+    target_h = VENDOR_ICON_MAX_H
+    req = max(target_w, target_h) * 8
+
+    source_icon = QIcon(str(path))
+    pixmap = source_icon.pixmap(req, req)
+    if pixmap.isNull():
+        pixmap = QPixmap(str(path))
+    if pixmap.isNull():
+        return None
+
+    img = pixmap.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+    min_x = img.width()
+    min_y = img.height()
+    max_x = -1
+    max_y = -1
+    for y in range(img.height()):
+        for x in range(img.width()):
+            if img.pixelColor(x, y).alpha() > 0:
+                if x < min_x:
+                    min_x = x
+                if y < min_y:
+                    min_y = y
+                if x > max_x:
+                    max_x = x
+                if y > max_y:
+                    max_y = y
+
+    if max_x >= min_x and max_y >= min_y:
+        img = img.copy(QRect(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1))
+
+    app = QApplication.instance()
+    dpr = float(app.devicePixelRatio() if app is not None else 1.0)
+    px_w = max(1, int(round(target_w * dpr)))
+    px_h = max(1, int(round(target_h * dpr)))
+
+    fit_scale = min(px_w / max(1, img.width()), px_h / max(1, img.height()))
+
+    if fit_scale <= 1.0:
+        target_scale = fit_scale
+    else:
+        min_w = max(1, int(round(px_w * 0.45)))
+        min_h = max(1, int(round(px_h * 0.80)))
+        desired_scale = max(
+            min_w / max(1, img.width()),
+            min_h / max(1, img.height()),
+            1.0,
+        )
+        target_scale = min(fit_scale, min(desired_scale, 2.25))
+
+    if abs(target_scale - 1.0) < 1e-6:
+        scaled_img = img
+    elif target_scale < 1.0:
+        scaled_img = img.scaled(
+            max(1, int(round(img.width() * target_scale))),
+            max(1, int(round(img.height() * target_scale))),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+    else:
+        scaled_img = img.scaled(
+            max(1, int(round(img.width() * target_scale))),
+            max(1, int(round(img.height() * target_scale))),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+
+    canvas_img = QImage(px_w, px_h, QImage.Format.Format_ARGB32)
+    canvas_img.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(canvas_img)
+    x = (px_w - scaled_img.width()) // 2
+    y = (px_h - scaled_img.height()) // 2
+    painter.drawImage(x, y, scaled_img)
+    painter.end()
+
+    canvas = QPixmap.fromImage(canvas_img)
+    canvas.setDevicePixelRatio(dpr)
+    icon = QIcon(canvas)
+    if icon.isNull():
+        return None
+    return icon
+
+
+def get_vendor_placeholder_icon() -> QIcon:
+    global _vendor_icon_placeholder
+    if _vendor_icon_placeholder is not None:
+        return _vendor_icon_placeholder
+
+    canvas = QPixmap(VENDOR_ICON_MAX_W, VENDOR_ICON_MAX_H)
+    canvas.fill(Qt.GlobalColor.transparent)
+    _vendor_icon_placeholder = QIcon(canvas)
+    return _vendor_icon_placeholder
+
+
+def get_vendor_icon(vendor_name: str) -> Optional[QIcon]:
+    if not vendor_name:
+        return None
+    if vendor_name in _vendor_icon_cache:
+        return _vendor_icon_cache[vendor_name]
+
+    icon_path = _resolve_vendor_icon_path(vendor_name)
+    if icon_path is not None:
+        icon = _build_vendor_icon(icon_path)
+        if icon is not None:
+            _vendor_icon_cache[vendor_name] = icon
+            return icon
+
+    _vendor_icon_cache[vendor_name] = None
+    return None
 
 
 def _load_system_oui() -> Dict[str, str]:
@@ -490,15 +840,18 @@ def _load_system_oui() -> Dict[str, str]:
 
 def reload_oui_db():
     """Force reload of the OUI database (call after a fresh download)."""
-    global _oui_full, _oui_loaded
-    _oui_full = _load_downloaded_oui() or _load_embedded_oui() or _load_system_oui()
+    global _oui_full, _oui_loaded, _oui_suffix_unique_vendor, _vendor_urls_loaded
+    _oui_full = _load_oui_with_precedence()
     _oui_loaded = True
+    _oui_suffix_unique_vendor = None
+    _vendor_urls_loaded = False
+    _vendor_icon_cache.clear()
 
 
 def get_manufacturer(bssid: str) -> str:
-    global _oui_full, _oui_loaded
+    global _oui_full, _oui_loaded, _oui_suffix_unique_vendor
     if not _oui_loaded:
-        _oui_full = _load_downloaded_oui() or _load_embedded_oui() or _load_system_oui()
+        _oui_full = _load_oui_with_precedence()
         _oui_loaded = True
     if not bssid:
         return ""
@@ -506,6 +859,33 @@ def get_manufacturer(bssid: str) -> str:
     prefix = mac[:8]
     if _oui_full and prefix in _oui_full:
         return _oui_full[prefix]
+
+    # Some AP radios use locally administered BSSIDs (U/L bit set), which
+    # often map to an underlying globally administered vendor OUI with that
+    # bit cleared. If direct lookup misses, try clearing the U/L bit.
+    try:
+        first_octet = int(prefix[:2], 16)
+        if first_octet & 0x02:
+            ga_octet = first_octet & 0xFD
+            ga_prefix = f"{ga_octet:02X}{prefix[2:]}"
+            if _oui_full and ga_prefix in _oui_full:
+                return _oui_full[ga_prefix]
+
+            # Conservative fallback for locally-administered addresses where
+            # only the first OUI octet was transformed by firmware/tooling.
+            # We only accept BB:CC suffixes that map to exactly one
+            # globally-administered OUI prefix in the current DB.
+            if not (first_octet & 0x01):
+                if _oui_suffix_unique_vendor is None:
+                    _oui_suffix_unique_vendor = _build_unique_oui_suffix_vendor_index(
+                        _oui_full or {}
+                    )
+                suffix = prefix[3:8]
+                vendor = (_oui_suffix_unique_vendor or {}).get(suffix, "")
+                if vendor:
+                    return vendor
+    except Exception:
+        pass
     return ""
 
 
@@ -654,6 +1034,8 @@ class AccessPoint:
     station_count: Optional[int] = None  # BSS Load station count
     pmf: str = ""  # "No" / "Optional" / "Required"
     akm: str = ""  # "WPA2-PSK" / "WPA3-SAE" / "Enterprise" / …
+    akm_raw: str = ""  # raw AKM string from iw (Authentication suites)
+    wps_manufacturer: str = ""  # Manufacturer from WPS IE (if advertised)
     rrm: bool = False  # 802.11k Radio Resource Measurement
     btm: bool = False  # 802.11v BSS Transition Management
     ft: bool = False  # 802.11r Fast Transition
@@ -662,10 +1044,12 @@ class AccessPoint:
     # ── Computed in __post_init__ ────────────────────────────────────────────
     band: str = field(init=False)
     manufacturer: str = field(init=False)
+    manufacturer_source: str = field(init=False)
 
     def __post_init__(self):
         self.band = freq_to_band(self.freq_mhz)
         self.manufacturer = get_manufacturer(self.bssid)
+        self.manufacturer_source = "OUI database" if self.manufacturer else "Unknown"
 
     @property
     def dbm(self) -> int:
@@ -683,7 +1067,7 @@ class AccessPoint:
 
     @property
     def kvr_flags(self) -> str:
-        """Compact 802.11k/v/r roaming-feature badge, e.g. 'k v r' or '—'."""
+        """Compact 802.11k/v/r roaming-feature badge, e.g. 'k v r' or ''."""
         flags = []
         if self.rrm:
             flags.append("k")
@@ -691,7 +1075,7 @@ class AccessPoint:
             flags.append("v")
         if self.ft:
             flags.append("r")
-        return " ".join(flags) if flags else "—"
+        return " ".join(flags) if flags else ""
 
     @property
     def protocol(self) -> str:
@@ -711,21 +1095,102 @@ class AccessPoint:
         return "B/G (802.11b/g)"
 
     @property
+    def phy_mode(self) -> str:
+        """Compact 802.11 PHY mode for table display (e.g. B/G, A, A/N, AX)."""
+        if self.wifi_gen == "WiFi 7":
+            return "BE"
+        if self.wifi_gen in ("WiFi 6", "WiFi 6E"):
+            return "AX"
+        if self.wifi_gen == "WiFi 5":
+            return "AC"
+        if self.wifi_gen == "WiFi 4":
+            return "A/N" if self.freq_mhz >= 5000 else "B/G/N"
+        return "A" if self.freq_mhz >= 5000 else "B/G"
+
+    @property
     def display_ssid(self) -> str:
         return self.ssid if self.ssid else f"<hidden> ({self.bssid})"
 
     @property
     def security_short(self) -> str:
-        """Human-readable security summary; uses iw AKM info when available."""
-        if self.akm:
-            return self.akm
-        if self.rsn_flags and self.rsn_flags not in ("(none)", "--", ""):
-            return "WPA2/3"
-        if self.wpa_flags and self.wpa_flags not in ("(none)", "--", ""):
-            return "WPA"
-        if not self.security or self.security in ("--", ""):
+        """Compact canonical security label for table/dashboard display."""
+
+        def _nz(v: str) -> str:
+            return (v or "").strip()
+
+        sec = _nz(self.security).upper()
+        wpa = _nz(self.wpa_flags).upper()
+        rsn = _nz(self.rsn_flags).upper()
+        akm = _nz(getattr(self, "akm_raw", "") or self.akm).upper()
+
+        has_wpa_ie = wpa not in ("", "--", "(NONE)")
+        has_rsn_ie = rsn not in ("", "--", "(NONE)")
+        has_wep = "WEP" in sec
+        has_sae = "SAE" in akm
+        has_psk = "PSK" in akm or "PSK" in sec or "PSK" in wpa or "PSK" in rsn
+        has_eap = (
+            "EAP" in akm
+            or "802.1X" in akm
+            or "8021X" in akm
+            or "ENTERPRISE" in akm
+            or "EAP" in sec
+        )
+        has_owe = "OWE" in akm or "OWE" in sec
+
+        if not sec and not has_wpa_ie and not has_rsn_ie and not akm:
             return "Open"
-        return self.security
+        if has_wep:
+            return "WEP"
+        if has_owe:
+            return "OWE"
+
+        if has_sae and has_psk:
+            return "WPA2/WPA3 (PSK/SAE)"
+        if has_sae:
+            return "WPA3 (SAE)"
+
+        if has_eap:
+            if has_wpa_ie and has_rsn_ie:
+                return "WPA/WPA2 (802.1X)"
+            if has_rsn_ie:
+                return "WPA2 (802.1X)"
+            return "Enterprise (802.1X)"
+
+        if has_wpa_ie and has_rsn_ie:
+            return "WPA/WPA2 (PSK)"
+        if has_rsn_ie:
+            return "WPA2 (PSK)"
+        if has_wpa_ie:
+            return "WPA (PSK)"
+
+        if "WPA3" in sec and "WPA2" in sec:
+            return "WPA2/WPA3 (PSK/SAE)"
+        if "WPA3" in sec:
+            return "WPA3"
+        if "WPA2" in sec and "WPA" in sec:
+            return "WPA/WPA2"
+        if "WPA2" in sec:
+            return "WPA2"
+        if "WPA" in sec:
+            return "WPA"
+        return "Open"
+
+    @property
+    def security_tooltip(self) -> str:
+        """Detailed security info for table tooltip."""
+
+        def _nz(v: str) -> str:
+            s = (v or "").strip()
+            return s if s else "—"
+
+        return (
+            f"Security: {_nz(self.security_short)}\n"
+            f"nmcli SECURITY: {_nz(self.security)}\n"
+            f"WPA flags: {_nz(self.wpa_flags)}\n"
+            f"RSN flags: {_nz(self.rsn_flags)}\n"
+            f"AKM (iw): {_nz(getattr(self, 'akm_raw', '') or self.akm)}\n"
+            f"PMF: {_nz(self.pmf)}"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -907,6 +1372,7 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         akm_m = re.search(r"Authentication suites:(.*)", text)
         if akm_m:
             raw = akm_m.group(1)
+            d["akm_raw"] = raw.strip()
             has_sae = "SAE" in raw
             has_psk = "PSK" in raw and "FT/PSK" not in raw or "PSK" in raw
             has_eap = "EAP" in raw or "802.1X" in raw
@@ -937,6 +1403,13 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             )
         else:
             d["pmf"] = "No"
+
+        # ── WPS manufacturer hint (often reveals branded vendor on LAA MACs) ──
+        wps_manuf_m = re.search(r"(?im)^\s*\*\s*Manufacturer:\s*(.+?)\s*$", text)
+        if wps_manuf_m:
+            wps_name = wps_manuf_m.group(1).strip().strip('"')
+            if wps_name and wps_name.lower() not in {"unknown", "private", "n/a"}:
+                d["wps_manufacturer"] = wps_name
 
         # ── 802.11k / 802.11v ────────────────────────────────────────────
         d["rrm"] = "Neighbor Report" in text
@@ -991,6 +1464,8 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 "station_count",
                 "pmf",
                 "akm",
+                "akm_raw",
+                "wps_manufacturer",
                 "rrm",
                 "btm",
                 "ft",
@@ -999,6 +1474,21 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
             ):
                 if attr in d:
                     setattr(ap, attr, d[attr])
+
+            # Prefer WPS-advertised manufacturer when OUI lookup is missing
+            # or when BSSID is locally-administered (common synthetic radio MAC).
+            wps_vendor = d.get("wps_manufacturer", "")
+            if wps_vendor:
+                use_wps = not ap.manufacturer
+                try:
+                    first_octet = int(ap.bssid[:2], 16)
+                    if first_octet & 0x02:
+                        use_wps = True
+                except Exception:
+                    pass
+                if use_wps:
+                    ap.manufacturer = wps_vendor
+                    ap.manufacturer_source = "WPS (iw scan)"
     except Exception:
         pass
 
@@ -1058,6 +1548,7 @@ TABLE_HEADERS = [
     "BSSID (MAC)",
     "Manufacturer",
     "Band",
+    "Country",
     "Ch",
     "Freq (MHz)",
     "Width (MHz)",
@@ -1066,11 +1557,11 @@ TABLE_HEADERS = [
     "dBm",
     "Rate (Mbps)",
     "Security",
-    "Mode",
+    "802.11",
     "Gen",
     "Ch.Util%",
     "Clients",
-    "k/v/r",
+    "Roaming",
 ]
 
 COL_INUSE = 0
@@ -1078,19 +1569,20 @@ COL_SSID = 1
 COL_BSSID = 2
 COL_MANUF = 3
 COL_BAND = 4
-COL_CHAN = 5
-COL_FREQ = 6
-COL_BW = 7
-COL_SPAN = 8  # Channel span, e.g. "116–128" for ch116@80MHz on 5 GHz
-COL_SIG = 9
-COL_DBM = 10
-COL_RATE = 11
-COL_SEC = 12
-COL_MODE = 13
-COL_GEN = 14  # WiFi generation (WiFi 4/5/6/6E/7)
-COL_UTIL = 15  # Channel utilisation %  (BSS Load)
-COL_CLIENTS = 16  # Station count          (BSS Load)
-COL_KVR = 17  # 802.11k/v/r roaming flags
+COL_COUNTRY = 5
+COL_CHAN = 6
+COL_FREQ = 7
+COL_BW = 8
+COL_SPAN = 9  # Channel span, e.g. "116–128" for ch116@80MHz on 5 GHz
+COL_SIG = 10
+COL_DBM = 11
+COL_RATE = 12
+COL_SEC = 13
+COL_MODE = 14
+COL_GEN = 15  # WiFi generation (WiFi 4/5/6/6E/7)
+COL_UTIL = 16  # Channel utilisation %  (BSS Load)
+COL_CLIENTS = 17  # Station count          (BSS Load)
+COL_KVR = 18  # 802.11k/v/r roaming flags
 
 
 class APTableModel(QAbstractTableModel):
@@ -1139,6 +1631,17 @@ class APTableModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.DisplayRole:
             return self._display(ap, col)
+
+        if role == Qt.ItemDataRole.ToolTipRole:
+            if col == COL_SEC:
+                return ap.security_tooltip
+            return None
+
+        if role == Qt.ItemDataRole.DecorationRole:
+            if col == COL_MANUF:
+                icon = get_vendor_icon(ap.manufacturer)
+                return icon if icon is not None else get_vendor_placeholder_icon()
+            return None
 
         if role == Qt.ItemDataRole.ForegroundRole:
             if col == COL_SSID:
@@ -1195,7 +1698,7 @@ class APTableModel(QAbstractTableModel):
                 COL_UTIL,
                 COL_CLIENTS,
             }
-            if col in numeric_cols:
+            if col in numeric_cols or col == COL_KVR:
                 return Qt.AlignmentFlag.AlignCenter
             return Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
 
@@ -1222,9 +1725,11 @@ class APTableModel(QAbstractTableModel):
         if col == COL_BSSID:
             return ap.bssid
         if col == COL_MANUF:
-            return ap.manufacturer
+            return format_manufacturer_display(ap.manufacturer)
         if col == COL_BAND:
             return ap.band
+        if col == COL_COUNTRY:
+            return ap.country or ""
         if col == COL_CHAN:
             return str(ap.channel) if ap.channel else "?"
         if col == COL_FREQ:
@@ -1242,14 +1747,16 @@ class APTableModel(QAbstractTableModel):
         if col == COL_SEC:
             return ap.security_short
         if col == COL_MODE:
-            return ap.mode
+            return ap.phy_mode
         if col == COL_GEN:
-            return ap.wifi_gen or "—"
+            if ap.wifi_gen:
+                return ap.wifi_gen
+            return "Legacy" if ap.phy_mode in ("A", "B/G") else ""
         if col == COL_UTIL:
             pct = ap.chan_util_pct
-            return f"{pct}%" if pct is not None else "—"
+            return f"{pct}%" if pct is not None else ""
         if col == COL_CLIENTS:
-            return str(ap.station_count) if ap.station_count is not None else "—"
+            return str(ap.station_count) if ap.station_count is not None else ""
         if col == COL_KVR:
             return ap.kvr_flags
         return ""
@@ -1318,10 +1825,11 @@ class APFilterProxy(QSortFilterProxyModel):
         COL_BSSID: "MAC",
         COL_MANUF: "Vendor",
         COL_BAND: "Band",
+        COL_COUNTRY: "Country",
         COL_CHAN: "Ch",
         COL_SEC: "Security",
         COL_GEN: "Gen",
-        COL_KVR: "k/v/r",
+        COL_KVR: "Roaming",
     }
 
     def active_filter_text(self) -> str:
@@ -3172,8 +3680,6 @@ class ManagedCaptureWindow(QDialog):
         sb.setValue(sb.maximum())
 
     def _make_process(self):
-        from PyQt6.QtCore import QProcess
-
         p = QProcess(self)
         p.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         return p
@@ -3359,6 +3865,7 @@ class MainWindow(QMainWindow):
         # ── AP Table ───────────────────────────────────────────────────────
         self._table = QTableView()
         self._table.setModel(self._proxy)
+        self._table.setIconSize(QSize(VENDOR_ICON_MAX_W, VENDOR_ICON_MAX_H))
         self._table.setSortingEnabled(True)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -3380,11 +3887,12 @@ class MainWindow(QMainWindow):
         self._table.setMinimumHeight(200)
         # Initial column widths (all are user-draggable)
         _col_widths = {
-            COL_INUSE: 26,
+            COL_INUSE: 10,
             COL_SSID: 180,
             COL_BSSID: 148,
             COL_MANUF: 180,
             COL_BAND: 72,
+            COL_COUNTRY: 64,
             COL_CHAN: 44,
             COL_FREQ: 86,
             COL_BW: 96,
@@ -3407,48 +3915,44 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._table)
 
         # ── Graph tabs ─────────────────────────────────────────────────────
-        tabs = QTabWidget()
-        tabs.setMinimumHeight(280)
-        splitter.addWidget(tabs)
+        self._tabs = QTabWidget()
+        self._tabs.setMinimumHeight(280)
+        splitter.addWidget(self._tabs)
 
         self._channel_graph = ChannelGraphWidget()
         self._channel_graph.ap_highlighted.connect(self._on_graph_highlight)
-        tabs.addTab(self._channel_graph, "📡  Channel Graph")
+        self._tabs.addTab(self._channel_graph, "📡  Channel Graph")
 
         self._history_graph = SignalHistoryWidget()
-        tabs.addTab(self._history_graph, "📈  Signal History")
+        self._tabs.addTab(self._history_graph, "📈  Signal History")
 
         # Details tab (selected AP)
         self._details_widget = QWidget()
         self._details_widget.setContentsMargins(0, 0, 0, 0)
         _det_outer = QVBoxLayout(self._details_widget)
-        _det_outer.setContentsMargins(0, 0, 0, 0)
+        _det_outer.setContentsMargins(10, 10, 10, 10)
+        _det_outer.setSpacing(10)
         # SSID header label
         self._det_ssid = QLabel("Select an access point to view details.")
         self._det_ssid.setTextFormat(Qt.TextFormat.RichText)
-        self._det_ssid.setContentsMargins(20, 16, 20, 4)
+        self._det_ssid.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self._det_ssid.setContentsMargins(14, 12, 14, 4)
         _det_outer.addWidget(self._det_ssid)
         # Separator line
         _det_sep = QFrame()
         _det_sep.setFrameShape(QFrame.Shape.HLine)
         _det_sep.setFrameShadow(QFrame.Shadow.Sunken)
         _det_outer.addWidget(_det_sep)
-        # Form rows
-        _det_form_w = QWidget()
-        self._det_form = QFormLayout(_det_form_w)
-        self._det_form.setLabelAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        self._det_form.setHorizontalSpacing(18)
-        self._det_form.setVerticalSpacing(10)
-        self._det_form.setContentsMargins(20, 12, 20, 20)
-        _det_outer.addWidget(_det_form_w)
-        _det_outer.addStretch()
         # pre-create value labels for each row
         _DET_ROWS = [
             "bssid",
             "manufacturer",
+            "manufacturer_source",
             "wifi_gen",
+            "mode_80211",
             "band",
             "channel",
             "frequency",
@@ -3457,16 +3961,22 @@ class MainWindow(QMainWindow):
             "signal",
             "max_rate",
             "security",
+            "security_nmcli",
+            "wpa_flags",
+            "rsn_flags",
+            "akm_raw",
+            "wps_manufacturer",
             "pmf",
             "chan_util",
             "clients",
             "roaming",
-            "mode",
         ]
         _DET_LABELS = [
             "BSSID (MAC)",
             "Manufacturer",
+            "Manufacturer Source",
             "WiFi Generation",
+            "802.11 PHY",
             "Band",
             "Channel",
             "Frequency",
@@ -3474,27 +3984,106 @@ class MainWindow(QMainWindow):
             "Country",
             "Signal",
             "Max Rate",
-            "Security",
+            "Security (Compact)",
+            "nmcli SECURITY",
+            "WPA Flags",
+            "RSN Flags",
+            "AKM (iw)",
+            "WPS Manufacturer (iw)",
             "PMF (802.11w)",
             "Channel Util",
             "Clients",
             "Roaming (k/v/r)",
-            "Mode",
         ]
+        _DET_LABEL_BY_KEY = dict(zip(_DET_ROWS, _DET_LABELS))
+        _DET_LEFT_KEYS = [
+            "bssid",
+            "manufacturer",
+            "manufacturer_source",
+            "wifi_gen",
+            "mode_80211",
+            "band",
+            "channel",
+            "frequency",
+            "chan_width",
+            "country",
+            "signal",
+        ]
+        _DET_RIGHT_KEYS = [
+            "max_rate",
+            "security",
+            "security_nmcli",
+            "wpa_flags",
+            "rsn_flags",
+            "akm_raw",
+            "wps_manufacturer",
+            "pmf",
+            "chan_util",
+            "clients",
+            "roaming",
+        ]
+
+        self._det_cards_wrap = QWidget()
+        _det_cards = QHBoxLayout(self._det_cards_wrap)
+        _det_cards.setContentsMargins(0, 0, 0, 0)
+        _det_cards.setSpacing(12)
+
+        self._det_card_left = QFrame()
+        self._det_card_left.setObjectName("detailsCard")
+        self._det_card_right = QFrame()
+        self._det_card_right.setObjectName("detailsCard")
+
+        _left_form = QFormLayout(self._det_card_left)
+        _left_form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        _left_form.setHorizontalSpacing(16)
+        _left_form.setVerticalSpacing(9)
+        _left_form.setContentsMargins(14, 12, 14, 12)
+
+        _right_form = QFormLayout(self._det_card_right)
+        _right_form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        _right_form.setHorizontalSpacing(16)
+        _right_form.setVerticalSpacing(9)
+        _right_form.setContentsMargins(14, 12, 14, 12)
+
+        _det_cards.addWidget(self._det_card_left, 1)
+        _det_cards.addWidget(self._det_card_right, 1)
+        _det_outer.addWidget(self._det_cards_wrap)
+        _det_outer.addStretch()
+
         self._det_vals: dict[str, QLabel] = {}
-        for key, lbl_text in zip(_DET_ROWS, _DET_LABELS):
+        for key in _DET_ROWS:
+            lbl_text = _DET_LABEL_BY_KEY[key]
             lbl = QLabel(f"<b>{lbl_text}</b>")
             lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setProperty("detailRole", "name")
             val = QLabel("—")
             val.setTextFormat(Qt.TextFormat.RichText)
             val.setWordWrap(True)
+            val.setProperty("detailRole", "value")
+            val.setMargin(4)
+            val.setMinimumHeight(24)
+            val.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.TextSelectableByKeyboard
+            )
             self._det_vals[key] = val
-            self._det_form.addRow(lbl, val)
+            if key in _DET_LEFT_KEYS:
+                _left_form.addRow(lbl, val)
+            else:
+                _right_form.addRow(lbl, val)
+
         _details_scroll = QScrollArea()
         _details_scroll.setWidgetResizable(True)
         _details_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _details_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         _details_scroll.setWidget(self._details_widget)
-        tabs.addTab(_details_scroll, "ℹ️  Details")
+        self._details_tab_index = self._tabs.addTab(_details_scroll, "ℹ️  Details")
 
         splitter.setSizes([380, 350])
 
@@ -3520,14 +4109,91 @@ class MainWindow(QMainWindow):
         shown = self._proxy.rowCount()
         self._lbl_count.setText(f"  {shown}/{len(self._aps)} APs")
 
+    def _capture_selection_bssids(self) -> Tuple[set[str], Optional[str]]:
+        """Return ({selected_bssids}, focused_bssid) from the current table selection."""
+        sm = self._table.selectionModel()
+        if sm is None:
+            return set(), None
+
+        selected_bssids: set[str] = set()
+        for proxy_idx in sm.selectedRows():
+            src_idx = self._proxy.mapToSource(proxy_idx)
+            ap = self._model.ap_at(src_idx.row())
+            if ap is not None:
+                selected_bssids.add(ap.bssid)
+
+        focused_bssid: Optional[str] = None
+        cur_proxy = sm.currentIndex()
+        if cur_proxy.isValid():
+            src_idx = self._proxy.mapToSource(cur_proxy)
+            ap = self._model.ap_at(src_idx.row())
+            if ap is not None:
+                focused_bssid = ap.bssid
+
+        return selected_bssids, focused_bssid
+
+    def _restore_selection_bssids(
+        self, selected_bssids: set[str], focused_bssid: Optional[str]
+    ) -> None:
+        """Restore table selection by BSSID after a model reset."""
+        sm = self._table.selectionModel()
+        if sm is None:
+            return
+
+        sm.blockSignals(True)
+        try:
+            sm.clearSelection()
+            first_idx = QModelIndex()
+            preferred_idx = QModelIndex()
+
+            for row in range(self._model.rowCount()):
+                ap = self._model.ap_at(row)
+                if ap is None or ap.bssid not in selected_bssids:
+                    continue
+
+                proxy_idx = self._proxy.mapFromSource(self._model.index(row, 0))
+                if not proxy_idx.isValid():
+                    continue
+
+                sm.select(
+                    proxy_idx,
+                    QItemSelectionModel.SelectionFlag.Select
+                    | QItemSelectionModel.SelectionFlag.Rows,
+                )
+
+                if not first_idx.isValid():
+                    first_idx = proxy_idx
+                if focused_bssid and ap.bssid == focused_bssid:
+                    preferred_idx = proxy_idx
+
+            current = preferred_idx if preferred_idx.isValid() else first_idx
+            if current.isValid():
+                sm.setCurrentIndex(
+                    current,
+                    QItemSelectionModel.SelectionFlag.Current
+                    | QItemSelectionModel.SelectionFlag.Rows,
+                )
+                self._table.scrollTo(
+                    current,
+                    QAbstractItemView.ScrollHint.PositionAtCenter,
+                )
+        finally:
+            sm.blockSignals(False)
+
+        self._on_selection_change(None, None)
+
     # Fields populated exclusively by enrich_with_iw — persist across missed cycles
     _IW_PERSIST_FIELDS = (
         "dbm_exact",
+        "manufacturer",
+        "manufacturer_source",
+        "wps_manufacturer",
         "wifi_gen",
         "chan_util",
         "station_count",
         "pmf",
         "akm",
+        "akm_raw",
         "rrm",
         "btm",
         "ft",
@@ -3535,7 +4201,100 @@ class MainWindow(QMainWindow):
         "iw_center_freq",
     )
 
+    def _auto_size_table_columns(self):
+        """
+        Fit all table columns to visible content/header, then distribute any
+        remaining horizontal space across all columns so the table fills width.
+        """
+        model = self._table.model()
+        if model is None:
+            return
+
+        col_count = model.columnCount()
+        if col_count <= 0:
+            return
+
+        viewport_w = self._table.viewport().width()
+        if viewport_w <= 0:
+            return
+
+        hdr = self._table.horizontalHeader()
+        min_w = max(24, hdr.minimumSectionSize())
+        row_count = min(model.rowCount(), 250)
+
+        fm = self._table.fontMetrics()
+        hfm = hdr.fontMetrics()
+
+        required: List[int] = []
+        for col in range(col_count):
+            header_text = str(
+                model.headerData(
+                    col, Qt.Orientation.Horizontal, Qt.ItemDataRole.DisplayRole
+                )
+                or ""
+            )
+            w = hfm.horizontalAdvance(header_text) + 28
+
+            for row in range(row_count):
+                idx = model.index(row, col)
+                text = str(model.data(idx, Qt.ItemDataRole.DisplayRole) or "")
+                if text:
+                    w = max(w, fm.horizontalAdvance(text) + 24)
+
+            required.append(max(min_w, w))
+
+        widths = required[:]
+        total = sum(widths)
+
+        if total > viewport_w and total > 0:
+            scale = viewport_w / total
+            widths = [max(min_w, int(w * scale)) for w in widths]
+
+        # If there's remaining room, distribute it across all columns
+        total = sum(widths)
+        if total < viewport_w:
+            extra = viewport_w - total
+            weight_sum = sum(required) or col_count
+            adds = [int(extra * (w / weight_sum)) for w in required]
+            widths = [w + a for w, a in zip(widths, adds)]
+
+            # Rounding fix-up: spread leftover pixels across columns
+            rem = viewport_w - sum(widths)
+            if rem > 0:
+                order = sorted(
+                    range(col_count), key=lambda i: required[i], reverse=True
+                )
+                for i in range(rem):
+                    widths[order[i % col_count]] += 1
+
+        # If rounding/scaling left us too wide, trim proportionally (not one column)
+        total = sum(widths)
+        if total > viewport_w:
+            over = total - viewport_w
+            while over > 0:
+                changed = False
+                for i in sorted(
+                    range(col_count), key=lambda k: widths[k], reverse=True
+                ):
+                    if widths[i] > min_w:
+                        widths[i] -= 1
+                        over -= 1
+                        changed = True
+                        if over == 0:
+                            break
+                if not changed:
+                    break
+
+        self._suspend_col_resize_tracking = True
+        try:
+            for col, w in enumerate(widths):
+                self._table.setColumnWidth(col, max(min_w, w))
+        finally:
+            self._suspend_col_resize_tracking = False
+
     def _on_data(self, aps: List[AccessPoint]):
+        selected_bssids, focused_bssid = self._capture_selection_bssids()
+
         # ── iw-field persistence ─────────────────────────────────────────────
         # pmf is set to "No" / "Optional" / "Required" by iw for every AP it
         # sees; a blank pmf means iw missed this AP on this cycle.
@@ -3555,19 +4314,14 @@ class MainWindow(QMainWindow):
         # ────────────────────────────────────────────────────────────────────
         self._aps = aps
         self._model.update(aps)
+        if selected_bssids:
+            self._restore_selection_bssids(selected_bssids, focused_bssid)
         # model.update() emits modelReset (not layoutChanged), so the proxy's
         # layoutChanged won't fire — update the graph explicitly here.
         self._channel_graph.update_aps(self._visible_aps(), self._model.ssid_colors())
         self._history_graph.set_ssid_colors(self._model.ssid_colors())
         self._history_graph.push(aps)
-        # Auto-fit SSID and Manufacturer to their content, unless the user
-        # has manually dragged those columns (tracked via _user_sized_cols).
-        _AUTO_FIT_MAX = 320
-        for col in (COL_SSID, COL_MANUF):
-            if col not in self._user_sized_cols:
-                self._table.resizeColumnToContents(col)
-                if self._table.columnWidth(col) > _AUTO_FIT_MAX:
-                    self._table.setColumnWidth(col, _AUTO_FIT_MAX)
+        self._auto_size_table_columns()
 
         total = len(aps)
         shown = self._proxy.rowCount()
@@ -3585,9 +4339,11 @@ class MainWindow(QMainWindow):
         if mode == "dark":
             app.setPalette(_dark_palette())
             plot_bg, plot_fg = "#0d1117", "#a9b4cc"
+            is_dark = True
         elif mode == "light":
             app.setPalette(_light_palette())
             plot_bg, plot_fg = "#f0f4f8", "#444455"
+            is_dark = False
         else:  # auto — match system dark/light, use our own palette
             from PyQt6.QtCore import Qt as _Qt
 
@@ -3606,14 +4362,60 @@ class MainWindow(QMainWindow):
         pg.setConfigOptions(foreground=plot_fg, background=plot_bg)
         self._channel_graph.set_theme(plot_bg, plot_fg)
         self._history_graph.set_theme(plot_bg, plot_fg)
+        self._apply_details_theme(is_dark)
         self._table.viewport().update()
+
+    def _apply_details_theme(self, is_dark: bool):
+        if is_dark:
+            card_bg = "#121a27"
+            card_border = "#273248"
+            name_color = "#8ea0bf"
+            value_bg = "#0f1622"
+            value_border = "#2a3850"
+            value_color = "#dfe7f5"
+        else:
+            card_bg = "#ffffff"
+            card_border = "#c7d2e3"
+            name_color = "#4a5a73"
+            value_bg = "#eef3fb"
+            value_border = "#c8d6ee"
+            value_color = "#22314a"
+
+        details_style = (
+            f"QFrame#detailsCard {{"
+            f"background:{card_bg};"
+            f"border:1px solid {card_border};"
+            "border-radius:8px;"
+            "}"
+            f"QLabel[detailRole='name'] {{"
+            f"color:{name_color};"
+            "font-size:10pt;"
+            "font-weight:600;"
+            "}"
+            f"QLabel[detailRole='value'] {{"
+            f"background:{value_bg};"
+            f"border:1px solid {value_border};"
+            "border-radius:6px;"
+            "padding:3px 8px;"
+            f"color:{value_color};"
+            "font-size:10.5pt;"
+            "}"
+        )
+
+        self._details_widget.setStyleSheet(details_style)
 
     def _on_error(self, msg: str):
         self.statusBar().showMessage(f"⚠ Scanner error: {msg}")
 
     def _on_col_resized(self, col: int, old_size: int, new_size: int):
         """Record that the user explicitly resized this column."""
+        if getattr(self, "_suspend_col_resize_tracking", False):
+            return
         self._user_sized_cols.add(col)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._auto_size_table_columns()
 
     def _on_band_change(self, band: str):
         self._proxy.set_band(
@@ -3733,8 +4535,9 @@ class MainWindow(QMainWindow):
         # ── Filterable columns ────────────────────────────────────────────
         filterable = [
             (COL_SSID, ap.display_ssid, "SSID"),
-            (COL_MANUF, ap.manufacturer, "Manufacturer"),
+            (COL_MANUF, format_manufacturer_display(ap.manufacturer), "Manufacturer"),
             (COL_BSSID, ap.bssid, "MAC address"),
+            (COL_COUNTRY, ap.country or "", "Country"),
             (COL_CHAN, str(ap.channel), "Channel"),
             (COL_BW, str(ap.bandwidth_mhz), "Channel Width"),
             (COL_BAND, ap.band, "Band"),
@@ -3774,9 +4577,37 @@ class MainWindow(QMainWindow):
 
         # Details shortcut
         det = menu.addAction("ℹ  View details")
-        det.triggered.connect(lambda: self._show_details(ap))
+        det.triggered.connect(lambda: self._open_details_for_proxy_row(idx.row()))
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _open_details_for_proxy_row(self, proxy_row: int) -> None:
+        if proxy_row < 0:
+            return
+        proxy_idx = self._proxy.index(proxy_row, 0)
+        if not proxy_idx.isValid():
+            return
+
+        sm = self._table.selectionModel()
+        if sm is not None:
+            sm.select(
+                proxy_idx,
+                QItemSelectionModel.SelectionFlag.ClearAndSelect
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+            sm.setCurrentIndex(
+                proxy_idx,
+                QItemSelectionModel.SelectionFlag.Current
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
+
+        src_idx = self._proxy.mapToSource(proxy_idx)
+        ap = self._model.ap_at(src_idx.row())
+        if ap is not None:
+            self._show_details(ap)
+
+        if hasattr(self, "_tabs") and hasattr(self, "_details_tab_index"):
+            self._tabs.setCurrentIndex(self._details_tab_index)
 
     def _refresh_filter_badge(self):
         if self._proxy.has_col_filters():
@@ -3871,8 +4702,22 @@ class MainWindow(QMainWindow):
         # ── Populate rows ─────────────────────────────────────────────────
         v = self._det_vals
         v["bssid"].setText(ap.bssid)
-        v["manufacturer"].setText(ap.manufacturer or dim("Unknown"))
+        manuf_raw = ap.manufacturer or ""
+        manuf_text = manuf_raw
+        if manuf_text:
+            icon_path = _resolve_vendor_icon_path(manuf_raw)
+            if icon_path is not None:
+                v["manufacturer"].setText(
+                    f"<img src='{icon_path.as_uri()}' height='16' "
+                    f"style='vertical-align:middle;'> &nbsp;{manuf_text}"
+                )
+            else:
+                v["manufacturer"].setText(manuf_text)
+        else:
+            v["manufacturer"].setText(dim("Unknown"))
+            v["manufacturer_source"].setText(ap.manufacturer_source or dim("Unknown"))
         v["wifi_gen"].setText(gen_html)
+        v["mode_80211"].setText(ap.phy_mode)
         v["band"].setText(ap.band)
         v["channel"].setText(str(ap.channel))
         v["frequency"].setText(f"{ap.freq_mhz} MHz")
@@ -3885,13 +4730,17 @@ class MainWindow(QMainWindow):
         )
         v["max_rate"].setText(f"{int(ap.rate_mbps)} Mbps")
         v["security"].setText(sec_html)
+        v["security_nmcli"].setText(ap.security or dim("—"))
+        v["wpa_flags"].setText(ap.wpa_flags or dim("—"))
+        v["rsn_flags"].setText(ap.rsn_flags or dim("—"))
+        v["akm_raw"].setText((ap.akm_raw or ap.akm) or dim("—"))
+        v["wps_manufacturer"].setText(ap.wps_manufacturer or dim("Not advertised"))
         v["pmf"].setText(pmf_html)
         v["chan_util"].setText(util_html)
         v["clients"].setText(
             str(ap.station_count) if ap.station_count is not None else dim("Unknown")
         )
         v["roaming"].setText(kvr_html)
-        v["mode"].setText(ap.mode)
 
     def _prompt_oui_download(self):
         dlg = OuiDownloadDialog(self, first_run=True)
