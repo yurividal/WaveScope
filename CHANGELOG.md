@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.5.2 — 2026-02-22
+
+### Highlights
+- Improvements to Details Tab.
+- Removed colored background tags in Details for a cleaner, less noisy view.
+- Improved Security and AKM dual-line display to avoid redundant second lines and hide source prefixes.
+- Made Manufacturer source visibility more reliable and improved WPA/RSN display wording for network-engineering readability.
+
 ## v1.5.1 — 2026-02-22
 
 ### Highlights

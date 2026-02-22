@@ -58,6 +58,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt,
+    QEvent,
     QTimer,
     QThread,
     QItemSelectionModel,
@@ -97,7 +98,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -3950,7 +3951,6 @@ class MainWindow(QMainWindow):
         _DET_ROWS = [
             "bssid",
             "manufacturer",
-            "manufacturer_source",
             "wifi_gen",
             "mode_80211",
             "band",
@@ -3961,7 +3961,6 @@ class MainWindow(QMainWindow):
             "signal",
             "max_rate",
             "security",
-            "security_nmcli",
             "wpa_flags",
             "rsn_flags",
             "akm_raw",
@@ -3972,34 +3971,31 @@ class MainWindow(QMainWindow):
             "roaming",
         ]
         _DET_LABELS = [
-            "BSSID (MAC)",
+            "BSSID (AP MAC, 48-bit)",
             "Manufacturer",
-            "Manufacturer Source",
             "WiFi Generation",
-            "802.11 PHY",
+            "802.11 PHY / Amendment",
             "Band",
             "Channel",
-            "Frequency",
-            "Channel Width",
-            "Country",
-            "Signal",
-            "Max Rate",
-            "Security (Compact)",
-            "nmcli SECURITY",
-            "WPA Flags",
-            "RSN Flags",
-            "AKM (iw)",
-            "WPS Manufacturer (iw)",
-            "PMF (802.11w)",
-            "Channel Util",
-            "Clients",
-            "Roaming (k/v/r)",
+            "Center Frequency",
+            "Channel Width (MHz)",
+            "Country Code (802.11d)",
+            "Signal (RSSI)",
+            "Max PHY Rate",
+            "Security Profile",
+            "WPA IE",
+            "RSN IE",
+            "AKM Suites",
+            "WPS Manufacturer (IE)",
+            "PMF / 802.11w",
+            "Channel Utilization (BSS Load)",
+            "Station Count (BSS Load)",
+            "Roaming Features (802.11k/v/r)",
         ]
         _DET_LABEL_BY_KEY = dict(zip(_DET_ROWS, _DET_LABELS))
         _DET_LEFT_KEYS = [
             "bssid",
             "manufacturer",
-            "manufacturer_source",
             "wifi_gen",
             "mode_80211",
             "band",
@@ -4012,7 +4008,6 @@ class MainWindow(QMainWindow):
         _DET_RIGHT_KEYS = [
             "max_rate",
             "security",
-            "security_nmcli",
             "wpa_flags",
             "rsn_flags",
             "akm_raw",
@@ -4055,6 +4050,8 @@ class MainWindow(QMainWindow):
         _det_outer.addStretch()
 
         self._det_vals: dict[str, QLabel] = {}
+        self._det_name_labels: dict[str, QLabel] = {}
+        self._manufacturer_tip_widgets: list[QLabel] = []
         for key in _DET_ROWS:
             lbl_text = _DET_LABEL_BY_KEY[key]
             lbl = QLabel(f"<b>{lbl_text}</b>")
@@ -4066,11 +4063,19 @@ class MainWindow(QMainWindow):
             val.setProperty("detailRole", "value")
             val.setMargin(4)
             val.setMinimumHeight(24)
-            val.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse
-                | Qt.TextInteractionFlag.TextSelectableByKeyboard
-            )
+            if key == "manufacturer":
+                val.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            else:
+                val.setTextInteractionFlags(
+                    Qt.TextInteractionFlag.TextSelectableByMouse
+                    | Qt.TextInteractionFlag.TextSelectableByKeyboard
+                )
             self._det_vals[key] = val
+            self._det_name_labels[key] = lbl
+            if key == "manufacturer":
+                lbl.installEventFilter(self)
+                val.installEventFilter(self)
+                self._manufacturer_tip_widgets.extend((lbl, val))
             if key in _DET_LEFT_KEYS:
                 _left_form.addRow(lbl, val)
             else:
@@ -4628,11 +4633,14 @@ class MainWindow(QMainWindow):
         color = self._model.ssid_colors().get(ap.ssid, QColor("#888888")).name()
         sig_col = signal_color(ap.signal).name()
 
-        def badge(text, bg, fg="white"):
-            return (
-                f'<span style="background:{bg};color:{fg};padding:3px 10px;'
-                f'border-radius:4px;font-size:13px;font-weight:500">{text}</span>'
-            )
+        def badge(text, bg=None, fg=None):
+            color = fg or bg
+            if color:
+                return (
+                    f'<span style="color:{color};font-size:14px;font-weight:600">'
+                    f"{text}</span>"
+                )
+            return f'<span style="font-size:14px;font-weight:600">{text}</span>'
 
         def dim(text):
             return f"<span style='color:#777'>{text}</span>"
@@ -4640,8 +4648,8 @@ class MainWindow(QMainWindow):
         # ── SSID header ───────────────────────────────────────────────────
         in_use = (
             (
-                ' &nbsp;<span style="background:#2e7d32;color:white;padding:2px 8px;'
-                'border-radius:4px;font-size:13px"> ▲ CONNECTED </span>'
+                ' &nbsp;<span style="font-size:13px;font-weight:600;color:#2e7d32;">'
+                '▲ CONNECTED</span>'
             )
             if ap.in_use
             else ""
@@ -4658,15 +4666,75 @@ class MainWindow(QMainWindow):
             gen_html = ap.protocol or dim("Unknown")
 
         # ── Security ──────────────────────────────────────────────────────
-        sec = ap.security_short
-        if sec == "Open":
-            sec_html = badge(sec, "#b71c1c")
-        elif "WPA3" in sec:
-            sec_html = badge(sec, "#1b5e20")
-        elif "WPA2" in sec:
-            sec_html = badge(sec, "#0d47a1")
+        sec_derived = (ap.security_short or "").strip()
+        sec_raw = (ap.security or "").strip()
+
+        def sec_richness(text: str) -> int:
+            s = (text or "").strip().upper()
+            if not s or s in {"(NONE)", "NONE", "--", "(NULL)"}:
+                return 0
+            score = len(re.findall(r"[A-Z0-9]+", s))
+            if "WPA3" in s or "SAE" in s or "OWE" in s:
+                score += 4
+            if "WPA2" in s:
+                score += 3
+            if "WPA" in s:
+                score += 2
+            if "EAP" in s or "802.1X" in s or "8021X" in s:
+                score += 3
+            if "PSK" in s:
+                score += 2
+            return score
+
+        def detail_tokens(text: str) -> set[str]:
+            t = (text or "").upper()
+            t = t.replace("802.1X", "8021X")
+            return set(re.findall(r"[A-Z0-9]+", t))
+
+        def should_show_secondary_line(primary: str, secondary: str) -> bool:
+            p = (primary or "").strip()
+            s = (secondary or "").strip()
+            if not p or not s:
+                return False
+            if p == s:
+                return False
+            p_tokens = detail_tokens(p)
+            s_tokens = detail_tokens(s)
+            if not s_tokens:
+                return False
+            return not s_tokens.issubset(p_tokens)
+
+        def choose_primary_detail(first: str, second: str) -> str:
+            a = (first or "").strip()
+            b = (second or "").strip()
+            if not a:
+                return b
+            if not b:
+                return a
+
+            a_tokens = detail_tokens(a)
+            b_tokens = detail_tokens(b)
+            a_has_wpa3 = "WPA3" in a_tokens or "SAE" in a_tokens
+            b_has_wpa3 = "WPA3" in b_tokens or "SAE" in b_tokens
+            if a_has_wpa3 != b_has_wpa3:
+                return a if a_has_wpa3 else b
+
+            if len(a_tokens) != len(b_tokens):
+                return a if len(a_tokens) > len(b_tokens) else b
+            return a if len(a) >= len(b) else b
+
+        sec_display = choose_primary_detail(sec_derived, sec_raw)
+        if not sec_display:
+            sec_display = "Open"
+
+        if sec_display == "Open":
+            sec_html = badge(sec_display, "#b71c1c")
+        elif "WPA3" in sec_display or "SAE" in sec_display:
+            sec_html = badge(sec_display, "#1b5e20")
+        elif "WPA2" in sec_display:
+            sec_html = badge(sec_display, "#0d47a1")
         else:
-            sec_html = badge(sec, "#37474F")
+            sec_html = badge(sec_display, "#37474F")
 
         # ── PMF ───────────────────────────────────────────────────────────
         pmf_map = {"Required": "#1b5e20", "Optional": "#e65100", "No": "#b71c1c"}
@@ -4689,21 +4757,107 @@ class MainWindow(QMainWindow):
             util_html = dim("No BSS Load IE")
 
         # ── Roaming ───────────────────────────────────────────────────────
-        kvr_html = ""
+        kvr_items: List[str] = []
         if ap.rrm:
-            kvr_html += badge("802.11k", "#1565C0") + "&nbsp; "
+            kvr_items.append("802.11k - Radio Resource Management <b>(RRM)</b>")
         if ap.btm:
-            kvr_html += badge("802.11v", "#1565C0") + "&nbsp; "
+            kvr_items.append("802.11v - BSS Transition Management <b>(BTM)</b>")
         if ap.ft:
-            kvr_html += badge("802.11r", "#1565C0") + "&nbsp; "
-        if not kvr_html:
-            kvr_html = dim("None detected")
+            kvr_items.append("802.11r - Fast BSS Transition <b>(FT)</b>")
+        kvr_html = "<br>".join(kvr_items) if kvr_items else dim("None detected")
 
         # ── Populate rows ─────────────────────────────────────────────────
         v = self._det_vals
+
+        def raw_ie_or_dim(value: str, missing_text: str) -> str:
+            text = (value or "").strip()
+            if not text or text.lower() in {"(none)", "none", "--", "(null)"}:
+                return dim(missing_text)
+            return text
+
+        def format_ie_flags(value: str, missing_text: str) -> str:
+            text = (value or "").strip()
+            if not text or text.lower() in {"(none)", "none", "--", "(null)"}:
+                return dim(missing_text)
+
+            cipher_map = {
+                "ccmp": "CCMP (AES)",
+                "ccmp256": "CCMP-256",
+                "ccmp_256": "CCMP-256",
+                "tkip": "TKIP",
+                "gcmp": "GCMP",
+                "gcmp256": "GCMP-256",
+                "gcmp_256": "GCMP-256",
+                "wep40": "WEP-40",
+                "wep104": "WEP-104",
+            }
+            akm_map = {
+                "psk": "PSK",
+                "sae": "SAE",
+                "eap": "802.1X (EAP)",
+                "8021x": "802.1X (EAP)",
+                "owe": "OWE",
+                "ft_psk": "FT-PSK",
+                "ft_sae": "FT-SAE",
+                "ft_eap": "FT-EAP",
+                "eap_suite_b_192": "EAP Suite-B-192",
+            }
+
+            def _add_unique(items: list[str], item: str):
+                if item and item not in items:
+                    items.append(item)
+
+            pairwise: list[str] = []
+            group: list[str] = []
+            akm: list[str] = []
+            other: list[str] = []
+
+            for raw_token in text.split():
+                token = raw_token.strip().lower()
+                if not token:
+                    continue
+
+                if token.startswith("pair_"):
+                    c = token[len("pair_") :]
+                    _add_unique(pairwise, cipher_map.get(c, c.upper()))
+                    continue
+
+                if token.startswith("group_"):
+                    c = token[len("group_") :]
+                    _add_unique(group, cipher_map.get(c, c.upper()))
+                    continue
+
+                if token.startswith("akm_"):
+                    a = token[len("akm_") :]
+                    _add_unique(akm, akm_map.get(a, a.upper()))
+                    continue
+
+                if token in cipher_map:
+                    _add_unique(other, cipher_map[token])
+                    continue
+
+                if token in akm_map:
+                    _add_unique(akm, akm_map[token])
+                    continue
+
+                _add_unique(other, raw_token)
+
+            lines: list[str] = []
+            if pairwise:
+                lines.append(f"Pairwise Cipher: {', '.join(pairwise)}")
+            if group:
+                lines.append(f"Group Cipher: {', '.join(group)}")
+            if akm:
+                lines.append(f"AKM: {', '.join(akm)}")
+            if other:
+                lines.append(f"Other: {', '.join(other)}")
+
+            return "<br>".join(lines) if lines else text
+
         v["bssid"].setText(ap.bssid)
         manuf_raw = ap.manufacturer or ""
         manuf_text = manuf_raw
+        manuf_source = (ap.manufacturer_source or "Unknown").strip() or "Unknown"
         if manuf_text:
             icon_path = _resolve_vendor_icon_path(manuf_raw)
             if icon_path is not None:
@@ -4715,7 +4869,10 @@ class MainWindow(QMainWindow):
                 v["manufacturer"].setText(manuf_text)
         else:
             v["manufacturer"].setText(dim("Unknown"))
-            v["manufacturer_source"].setText(ap.manufacturer_source or dim("Unknown"))
+        manuf_tip = f"Source: {manuf_source}"
+        v["manufacturer"].setToolTip(manuf_tip)
+        if "manufacturer" in self._det_name_labels:
+            self._det_name_labels["manufacturer"].setToolTip(manuf_tip)
         v["wifi_gen"].setText(gen_html)
         v["mode_80211"].setText(ap.phy_mode)
         v["band"].setText(ap.band)
@@ -4729,11 +4886,30 @@ class MainWindow(QMainWindow):
             f'<span style="color:{sig_col}">({ap.dbm} dBm)</span>'
         )
         v["max_rate"].setText(f"{int(ap.rate_mbps)} Mbps")
-        v["security"].setText(sec_html)
-        v["security_nmcli"].setText(ap.security or dim("—"))
-        v["wpa_flags"].setText(ap.wpa_flags or dim("—"))
-        v["rsn_flags"].setText(ap.rsn_flags or dim("—"))
-        v["akm_raw"].setText((ap.akm_raw or ap.akm) or dim("—"))
+        sec_line_top = sec_html
+        sec_secondary = sec_raw if sec_display == sec_derived else sec_derived
+        if should_show_secondary_line(sec_display, sec_secondary):
+            sec_line_bottom = dim(sec_secondary)
+            v["security"].setText(f"{sec_line_top}<br>{sec_line_bottom}")
+        else:
+            v["security"].setText(sec_line_top)
+        v["security"].setToolTip("")
+        v["wpa_flags"].setText(format_ie_flags(ap.wpa_flags, "WPA IE not present"))
+        v["rsn_flags"].setText(format_ie_flags(ap.rsn_flags, "RSN IE not present"))
+        v["wpa_flags"].setToolTip(raw_ie_or_dim(ap.wpa_flags, "WPA IE not present"))
+        v["rsn_flags"].setToolTip(raw_ie_or_dim(ap.rsn_flags, "RSN IE not present"))
+        akm_compact = (ap.akm or "").strip()
+        akm_verbose = (ap.akm_raw or "").strip()
+        akm_primary = choose_primary_detail(akm_compact, akm_verbose)
+        if akm_primary:
+            akm_secondary = akm_verbose if akm_primary == akm_compact else akm_compact
+            if should_show_secondary_line(akm_primary, akm_secondary):
+                v["akm_raw"].setText(f"{akm_primary}<br>{dim(akm_secondary)}")
+            else:
+                v["akm_raw"].setText(raw_ie_or_dim(akm_primary, "AKM unknown"))
+        else:
+            v["akm_raw"].setText(dim("AKM unknown"))
+        v["akm_raw"].setToolTip("")
         v["wps_manufacturer"].setText(ap.wps_manufacturer or dim("Not advertised"))
         v["pmf"].setText(pmf_html)
         v["chan_util"].setText(util_html)
@@ -4741,6 +4917,24 @@ class MainWindow(QMainWindow):
             str(ap.station_count) if ap.station_count is not None else dim("Unknown")
         )
         v["roaming"].setText(kvr_html)
+
+    def eventFilter(self, obj, event):
+        if (
+            hasattr(self, "_manufacturer_tip_widgets")
+            and obj in self._manufacturer_tip_widgets
+            and event.type()
+            in {
+                QEvent.Type.ToolTip,
+                QEvent.Type.Enter,
+                QEvent.Type.MouseButtonPress,
+            }
+        ):
+            tip = obj.toolTip() if hasattr(obj, "toolTip") else ""
+            if tip:
+                QToolTip.showText(QCursor.pos(), tip, obj)
+                if event.type() == QEvent.Type.ToolTip:
+                    return True
+        return super().eventFilter(obj, event)
 
     def _prompt_oui_download(self):
         dlg = OuiDownloadDialog(self, first_run=True)
