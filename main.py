@@ -92,7 +92,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -141,7 +141,6 @@ CH24 = {
 }
 # 5 GHz channels → center frequency
 CH5 = {
-    32: 5160,
     36: 5180,
     40: 5200,
     44: 5220,
@@ -265,34 +264,76 @@ def get_5ghz_bonded_info(primary_chan: int, bw_mhz: int) -> Tuple[int, List[int]
     return CH5.get(primary_chan, chan_to_freq(primary_chan)), [primary_chan]
 
 
+def _block_channel_range(
+    center_freq: int, bw_mhz: int, chan_dict: Dict[int, int]
+) -> Tuple[Optional[int], Optional[int]]:
+    """
+    Return (lo_chan, hi_chan) — the outermost primary channels that fall inside
+    a bonded block of `bw_mhz` MHz centered at `center_freq` MHz.
+
+    Each 20 MHz primary channel has its center `bw/2 - 10` MHz from the block
+    edge, so the outermost centers are at center_freq ± (bw/2 - 10).
+    Works for all bands: 2.4 GHz (40 MHz), 5 GHz, 6 GHz (up to 320 MHz).
+    """
+    half = bw_mhz // 2 - 10
+    lo = center_freq - half
+    hi = center_freq + half
+    in_range = [c for c, f in chan_dict.items() if lo <= f <= hi]
+    if not in_range:
+        return None, None
+    return min(in_range), max(in_range)
+
+
 def get_ap_draw_center(ap: "AccessPoint") -> float:
     """
     MHz center to use when placing the spectrum shape for `ap`.
-    For 5 GHz this is the bonded-block center (not the primary channel freq).
-    For 2.4 / 6 GHz the primary channel center freq is returned unchanged.
+    5 GHz: uses the proven IEEE block lookup table (unchanged from v1.3.0).
+    2.4 / 6 GHz: uses iw_center_freq when available, else primary channel freq.
     """
-    if ap.band == "5 GHz" and ap.channel and ap.bandwidth_mhz > 20:
-        center, _ = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
-        if center:
-            return float(center)
+    if ap.bandwidth_mhz > 20:
+        # 5 GHz: IEEE block lookup table (reliable, was working)
+        if ap.band == "5 GHz" and ap.channel:
+            center, _ = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
+            if center:
+                return float(center)
+        # 2.4 / 6 GHz: use iw-reported bonded block center when available
+        if ap.iw_center_freq:
+            return float(ap.iw_center_freq)
     return float(ap.freq_mhz)
 
 
 def get_ap_channel_span(ap: "AccessPoint") -> str:
     """
     Human-readable channel-span string for the table.
-    5 GHz examples: "116–128"  (80 MHz), "100–128" (160 MHz), "36" (20 MHz).
-    Other bands: frequency range, e.g. "2422–2462 MHz".
+    5 GHz:   "116–128" (80 MHz), "100–128" (160 MHz), "36" (20 MHz).
+    2.4 GHz: "6–10" (40 MHz HT40+), "2–6" (40 MHz HT40-).
+    6 GHz:   "1–13" (80 MHz), "1–29" (160 MHz), "1–61" (320 MHz).
     """
     if ap.band == "5 GHz" and ap.channel:
+        # Prefer iw center + formula; fall back to IEEE lookup table
+        if ap.iw_center_freq and ap.bandwidth_mhz > 20:
+            lo, hi = _block_channel_range(ap.iw_center_freq, ap.bandwidth_mhz, CH5)
+            if lo is not None and lo != hi:
+                return f"{lo}–{hi}"
         _, chans = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
         if len(chans) > 1:
             return f"{chans[0]}–{chans[-1]}"
         return str(ap.channel)
-    # 2.4 / 6 GHz — express as frequency range when wider than 20 MHz
-    if ap.bandwidth_mhz > 20 and ap.freq_mhz:
-        half = ap.bandwidth_mhz // 2
-        return f"{ap.freq_mhz - half}–{ap.freq_mhz + half}"
+
+    if ap.band == "2.4 GHz" and ap.channel:
+        if ap.iw_center_freq and ap.bandwidth_mhz == 40:
+            lo, hi = _block_channel_range(ap.iw_center_freq, 40, CH24)
+            if lo is not None and lo != hi:
+                return f"{lo}–{hi}"
+        return str(ap.channel)
+
+    if ap.band == "6 GHz" and ap.channel:
+        if ap.iw_center_freq and ap.bandwidth_mhz > 20:
+            lo, hi = _block_channel_range(ap.iw_center_freq, ap.bandwidth_mhz, CH6)
+            if lo is not None and lo != hi:
+                return f"{lo}–{hi}"
+        return str(ap.channel)
+
     return str(ap.channel) if ap.channel else "?"
 
 
@@ -969,6 +1010,7 @@ class AccessPoint:
     btm: bool = False  # 802.11v BSS Transition Management
     ft: bool = False  # 802.11r Fast Transition
     country: str = ""  # Country code from beacon (e.g. "DE")
+    iw_center_freq: Optional[int] = None  # bonded-block center MHz from iw (all bands)
     # ── Computed in __post_init__ ────────────────────────────────────────────
     band: str = field(init=False)
     manufacturer: str = field(init=False)
@@ -1257,6 +1299,20 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         if cc_m:
             d["country"] = cc_m.group(1)
 
+        # ── Bonded-block center frequency ─────────────────────────────────
+        # VHT (5 GHz 80/160) and HE/EHT (6 GHz) report "center freq 1: XXXX"
+        cf1_m = re.search(r"\*\s*center freq(?:\s+segment)?\s*1\s*:\s*(\d+)", text)
+        if cf1_m:
+            cf = int(cf1_m.group(1))
+            if cf > 0:
+                d["iw_center_freq"] = cf
+        # HT 40 MHz (2.4 GHz) reports secondary channel offset; compute center
+        if "iw_center_freq" not in d and freq_val > 0:
+            sec_m = re.search(r"\*\s*secondary channel offset:\s*(above|below)", text)
+            if sec_m:
+                offset = +10 if sec_m.group(1) == "above" else -10
+                d["iw_center_freq"] = int(freq_val) + offset
+
         result[bssid] = d
     return result
 
@@ -1291,6 +1347,7 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 "btm",
                 "ft",
                 "country",
+                "iw_center_freq",
             ):
                 if attr in d:
                     setattr(ap, attr, d[attr])
@@ -3358,6 +3415,9 @@ class MainWindow(QMainWindow):
         self.resize(1400, 850)
 
         self._aps: List[AccessPoint] = []
+        # Cache for iw-enriched fields — persisted across up to 5 missed cycles
+        self._iw_cache: Dict[str, dict] = {}   # bssid.lower() → field snapshot
+        self._iw_miss: Dict[str, int] = {}     # bssid.lower() → consecutive-miss count
         self._scanner = WiFiScanner(interval_sec=2)
         self._scanner.data_ready.connect(self._on_data)
         self._scanner.scan_error.connect(self._on_error)
@@ -3534,7 +3594,8 @@ class MainWindow(QMainWindow):
             COL_BAND: 72,
             COL_CHAN: 44,
             COL_FREQ: 86,
-            COL_BW: 72,
+            COL_BW: 96,
+            COL_SPAN: 82,
             COL_SIG: 66,
             COL_DBM: 80,
             COL_RATE: 94,
@@ -3666,7 +3727,28 @@ class MainWindow(QMainWindow):
         shown = self._proxy.rowCount()
         self._lbl_count.setText(f"  {shown}/{len(self._aps)} APs")
 
+    # Fields populated exclusively by enrich_with_iw — persist across missed cycles
+    _IW_PERSIST_FIELDS = (
+        "dbm_exact", "wifi_gen", "chan_util", "station_count",
+        "pmf", "akm", "rrm", "btm", "ft", "country", "iw_center_freq",
+    )
+
     def _on_data(self, aps: List[AccessPoint]):
+        # ── iw-field persistence ─────────────────────────────────────────────
+        # pmf is set to "No" / "Optional" / "Required" by iw for every AP it
+        # sees; a blank pmf means iw missed this AP on this cycle.
+        for ap in aps:
+            key = ap.bssid.lower()
+            if ap.pmf != "":
+                # iw enriched this AP — refresh cache, reset miss counter
+                self._iw_cache[key] = {f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS}
+                self._iw_miss[key] = 0
+            elif key in self._iw_cache and self._iw_miss.get(key, 0) < 5:
+                # iw missed this AP but we have recent data — restore it
+                for f, v in self._iw_cache[key].items():
+                    setattr(ap, f, v)
+                self._iw_miss[key] = self._iw_miss.get(key, 0) + 1
+        # ────────────────────────────────────────────────────────────────────
         self._aps = aps
         self._model.update(aps)
         # model.update() emits modelReset (not layoutChanged), so the proxy's
