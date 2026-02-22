@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *.deb
 _deb_build/
+_rpm_build/
 *.egg-info/
 dist/
 build/

@@ -92,7 +92,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -264,6 +264,58 @@ def get_5ghz_bonded_info(primary_chan: int, bw_mhz: int) -> Tuple[int, List[int]
     return CH5.get(primary_chan, chan_to_freq(primary_chan)), [primary_chan]
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 6 GHz bonded-channel group tables (derived from FCC/US standard-power plan)
+#
+# 20 MHz primaries: ch 1,5,9,…,233  (center_MHz = 5950 + ch*5)
+# 40 MHz centers:   ch 3,11,…,179   (pairs)
+# 80 MHz centers:   ch 7,23,…,167   (groups of 4)
+# 160 MHz centers:  ch 15,47,79,111,143 (groups of 8)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_6ghz_group(center_chan: int, bw_mhz: int) -> Tuple[List[int], int]:
+    n_20mhz = bw_mhz // 20
+    start = center_chan - 2 * (n_20mhz - 1)
+    chans = [start + 4 * i for i in range(n_20mhz)]
+    center_freq = 5950 + center_chan * 5
+    return chans, center_freq
+
+
+_6GHZ_GROUPS_40: List[Tuple[List[int], int]] = [
+    _make_6ghz_group(c, 40) for c in range(3, 180, 8)
+]
+_6GHZ_GROUPS_80: List[Tuple[List[int], int]] = [
+    _make_6ghz_group(c, 80) for c in range(7, 168, 16)
+]
+_6GHZ_GROUPS_160: List[Tuple[List[int], int]] = [
+    _make_6ghz_group(c, 160) for c in range(15, 144, 32)
+]
+
+# Fast lookup: (primary_chan, bw_mhz) → (center_freq_MHz, sorted_channels_list)
+_6GHZ_BONDED: Dict[Tuple[int, int], Tuple[int, List[int]]] = {}
+for _bw, _grps in [
+    (40, _6GHZ_GROUPS_40),
+    (80, _6GHZ_GROUPS_80),
+    (160, _6GHZ_GROUPS_160),
+]:
+    for _chans, _cf in _grps:
+        for _c in _chans:
+            _6GHZ_BONDED[(_c, _bw)] = (_cf, _chans)
+
+
+def get_6ghz_bonded_info(primary_chan: int, bw_mhz: int) -> Tuple[int, List[int]]:
+    """
+    Return (center_freq_MHz, [all_channels_in_block]) for a 6 GHz primary channel
+    at the given bandwidth, based on the standard 6 GHz bonded block tables.
+    Falls back to primary channel's own freq if not in table.
+    """
+    key = (primary_chan, bw_mhz)
+    if key in _6GHZ_BONDED:
+        return _6GHZ_BONDED[key]
+    return CH6.get(primary_chan, chan_to_freq(primary_chan)), [primary_chan]
+
+
 def _block_channel_range(
     center_freq: int, bw_mhz: int, chan_dict: Dict[int, int]
 ) -> Tuple[Optional[int], Optional[int]]:
@@ -287,16 +339,21 @@ def _block_channel_range(
 def get_ap_draw_center(ap: "AccessPoint") -> float:
     """
     MHz center to use when placing the spectrum shape for `ap`.
-    5 GHz: uses the proven IEEE block lookup table (unchanged from v1.3.0).
-    2.4 / 6 GHz: uses iw_center_freq when available, else primary channel freq.
+    5/6 GHz: uses bonded block lookup tables.
+    2.4 GHz: uses iw_center_freq when available, else primary channel freq.
     """
     if ap.bandwidth_mhz > 20:
-        # 5 GHz: IEEE block lookup table (reliable, was working)
+        # 5 GHz: IEEE block lookup table
         if ap.band == "5 GHz" and ap.channel:
             center, _ = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
             if center:
                 return float(center)
-        # 2.4 / 6 GHz: use iw-reported bonded block center when available
+        # 6 GHz: FCC/US 6 GHz bonded block lookup table
+        if ap.band == "6 GHz" and ap.channel:
+            center, chans = get_6ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
+            if center and len(chans) > 1:
+                return float(center)
+        # 2.4 GHz (or unknown): use iw-reported bonded block center when available
         if ap.iw_center_freq:
             return float(ap.iw_center_freq)
     return float(ap.freq_mhz)
@@ -328,10 +385,14 @@ def get_ap_channel_span(ap: "AccessPoint") -> str:
         return str(ap.channel)
 
     if ap.band == "6 GHz" and ap.channel:
-        if ap.iw_center_freq and ap.bandwidth_mhz > 20:
-            lo, hi = _block_channel_range(ap.iw_center_freq, ap.bandwidth_mhz, CH6)
-            if lo is not None and lo != hi:
-                return f"{lo}–{hi}"
+        if ap.bandwidth_mhz > 20:
+            _cf, chans = get_6ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
+            if len(chans) > 1:
+                return f"{chans[0]}–{chans[-1]}"
+            if ap.iw_center_freq:
+                lo, hi = _block_channel_range(ap.iw_center_freq, ap.bandwidth_mhz, CH6)
+                if lo is not None and lo != hi:
+                    return f"{lo}–{hi}"
         return str(ap.channel)
 
     return str(ap.channel) if ap.channel else "?"
@@ -357,439 +418,13 @@ def signal_to_dbm(signal: int) -> int:
 # OUI / Manufacturer Lookup
 # ─────────────────────────────────────────────────────────────────────────────
 
-_EMBEDDED_OUI: Dict[str, str] = {
-    # Apple
-    "00:03:93": "Apple",
-    "00:0A:95": "Apple",
-    "00:0D:93": "Apple",
-    "00:11:24": "Apple",
-    "00:14:51": "Apple",
-    "00:16:CB": "Apple",
-    "00:17:F2": "Apple",
-    "00:1B:63": "Apple",
-    "00:1C:B3": "Apple",
-    "00:1E:52": "Apple",
-    "00:1F:5B": "Apple",
-    "00:1F:F3": "Apple",
-    "00:21:E9": "Apple",
-    "00:23:12": "Apple",
-    "00:23:6C": "Apple",
-    "00:25:00": "Apple",
-    "00:25:BC": "Apple",
-    "00:26:B0": "Apple",
-    "00:26:BB": "Apple",
-    "04:52:F3": "Apple",
-    "04:4B:ED": "Apple",
-    "08:74:02": "Apple",
-    "10:40:F3": "Apple",
-    "18:81:0E": "Apple",
-    "20:A2:E4": "Apple",
-    "28:E0:2C": "Apple",
-    "3C:22:FB": "Apple",
-    "40:6C:8F": "Apple",
-    "40:D3:2D": "Apple",
-    "44:00:10": "Apple",
-    "48:43:7C": "Apple",
-    "54:26:96": "Apple",
-    "60:69:44": "Apple",
-    "68:FB:7E": "Apple",
-    "70:CD:60": "Apple",
-    "78:31:C1": "Apple",
-    "7C:D1:C3": "Apple",
-    "88:1F:A1": "Apple",
-    "8C:85:90": "Apple",
-    "90:3C:92": "Apple",
-    "98:F0:AB": "Apple",
-    "A4:C3:61": "Apple",
-    "A8:96:8A": "Apple",
-    "AC:7F:3E": "Apple",
-    "B8:17:C2": "Apple",
-    "BC:92:6B": "Apple",
-    "C0:84:7A": "Apple",
-    "C8:2A:14": "Apple",
-    "D4:90:9C": "Apple",
-    "DC:86:D8": "Apple",
-    "E4:CE:8F": "Apple",
-    "F0:B4:79": "Apple",
-    "F4:37:B7": "Apple",
-    # Samsung
-    "00:00:F0": "Samsung",
-    "00:12:47": "Samsung",
-    "00:15:99": "Samsung",
-    "00:17:D5": "Samsung",
-    "00:1A:8A": "Samsung",
-    "00:1B:98": "Samsung",
-    "00:21:19": "Samsung",
-    "00:23:39": "Samsung",
-    "08:08:C2": "Samsung",
-    "08:D4:2B": "Samsung",
-    "10:D5:42": "Samsung",
-    "18:22:7E": "Samsung",
-    "1C:66:AA": "Samsung",
-    "20:64:32": "Samsung",
-    "24:4B:03": "Samsung",
-    "30:19:66": "Samsung",
-    "34:47:90": "Samsung",
-    "38:AA:3C": "Samsung",
-    "40:0E:85": "Samsung",
-    "44:4E:1A": "Samsung",
-    "50:F5:20": "Samsung",
-    "54:9B:12": "Samsung",
-    "5C:49:79": "Samsung",
-    "60:A1:0A": "Samsung",
-    "64:B3:10": "Samsung",
-    "6C:2F:2C": "Samsung",
-    "74:45:8A": "Samsung",
-    "78:40:E4": "Samsung",
-    "7C:61:93": "Samsung",
-    "84:25:DB": "Samsung",
-    "88:32:9B": "Samsung",
-    "8C:71:F8": "Samsung",
-    "94:51:03": "Samsung",
-    "98:52:B1": "Samsung",
-    "9C:3A:AF": "Samsung",
-    "A0:82:1F": "Samsung",
-    "A8:06:00": "Samsung",
-    "AC:5A:14": "Samsung",
-    "B0:C4:E7": "Samsung",
-    "BC:20:A4": "Samsung",
-    "C0:BD:D1": "Samsung",
-    "CC:07:AB": "Samsung",
-    # Intel
-    "00:02:B3": "Intel",
-    "00:03:47": "Intel",
-    "00:0C:F1": "Intel",
-    "00:0E:35": "Intel",
-    "00:13:02": "Intel",
-    "00:13:20": "Intel",
-    "00:13:E8": "Intel",
-    "00:15:00": "Intel",
-    "00:16:EA": "Intel",
-    "00:18:DE": "Intel",
-    "00:19:D1": "Intel",
-    "00:1B:21": "Intel",
-    "00:1C:BF": "Intel",
-    "00:21:6A": "Intel",
-    "00:21:D8": "Intel",
-    "00:22:FA": "Intel",
-    "00:23:14": "Intel",
-    "00:24:D6": "Intel",
-    "24:77:03": "Intel",
-    "28:D2:44": "Intel",
-    "34:02:86": "Intel",
-    "38:DE:AD": "Intel",
-    "3C:A9:F4": "Intel",
-    "40:25:C2": "Intel",
-    "48:45:20": "Intel",
-    "4C:34:88": "Intel",
-    "54:35:30": "Intel",
-    "60:02:B4": "Intel",
-    "60:57:18": "Intel",
-    "68:05:CA": "Intel",
-    "6C:88:14": "Intel",
-    "78:92:9C": "Intel",
-    "7C:76:35": "Intel",
-    "80:19:34": "Intel",
-    "84:3A:4B": "Intel",
-    "8C:8D:28": "Intel",
-    "90:48:9A": "Intel",
-    "94:65:9C": "Intel",
-    "98:4F:EE": "Intel",
-    "A0:A8:CD": "Intel",
-    "A4:34:D9": "Intel",
-    "A8:7E:EA": "Intel",
-    "AC:37:43": "Intel",
-    "B0:10:41": "Intel",
-    "B4:6B:FC": "Intel",
-    "C4:D9:87": "Intel",
-    "C8:5B:76": "Intel",
-    "D0:7E:35": "Intel",
-    # TP-Link
-    "1C:3B:F3": "TP-Link",
-    "50:C7:BF": "TP-Link",
-    "54:C8:0F": "TP-Link",
-    "64:70:02": "TP-Link",
-    "6C:19:8F": "TP-Link",
-    "70:4F:57": "TP-Link",
-    "74:DA:38": "TP-Link",
-    "98:DA:C4": "TP-Link",
-    "A0:F3:C1": "TP-Link",
-    "AC:84:C6": "TP-Link",
-    "B0:48:7A": "TP-Link",
-    "C4:E9:84": "TP-Link",
-    "C8:D3:A3": "TP-Link",
-    "D8:0D:17": "TP-Link",
-    "E4:8D:8C": "TP-Link",
-    "E8:DE:27": "TP-Link",
-    "EC:08:6B": "TP-Link",
-    "F4:EC:38": "TP-Link",
-    "F8:1A:67": "TP-Link",
-    "10:27:F5": "TP-Link",
-    "18:A6:F7": "TP-Link",
-    "24:4B:FE": "TP-Link",
-    "2C:27:D7": "TP-Link",
-    "30:FC:68": "TP-Link",
-    "34:60:F9": "TP-Link",
-    "40:3F:8C": "TP-Link",
-    "44:94:FC": "TP-Link",
-    "50:3E:AA": "TP-Link",
-    "58:D5:6E": "TP-Link",
-    "5C:89:9A": "TP-Link",
-    "60:E3:27": "TP-Link",
-    "68:FF:7B": "TP-Link",
-    "6C:5A:B0": "TP-Link",
-    "84:16:F9": "TP-Link",
-    "90:F6:52": "TP-Link",
-    "98:25:4A": "TP-Link",
-    "A0:F3:C1": "TP-Link",
-    "B4:B0:24": "TP-Link",
-    "C0:4A:00": "TP-Link",
-    # NETGEAR
-    "00:09:5B": "NETGEAR",
-    "00:0F:B5": "NETGEAR",
-    "00:14:6C": "NETGEAR",
-    "00:18:4D": "NETGEAR",
-    "00:1B:2F": "NETGEAR",
-    "00:1E:2A": "NETGEAR",
-    "00:1F:33": "NETGEAR",
-    "00:22:3F": "NETGEAR",
-    "00:24:B2": "NETGEAR",
-    "00:26:F2": "NETGEAR",
-    "20:4E:7F": "NETGEAR",
-    "28:C6:8E": "NETGEAR",
-    "2C:B0:5D": "NETGEAR",
-    "30:46:9A": "NETGEAR",
-    "6C:B0:CE": "NETGEAR",
-    "84:1B:5E": "NETGEAR",
-    "A0:21:B7": "NETGEAR",
-    "A0:40:A0": "NETGEAR",
-    "C0:3F:0E": "NETGEAR",
-    "E0:46:9A": "NETGEAR",
-    "10:0C:6B": "NETGEAR",
-    "1C:1B:0D": "NETGEAR",
-    "20:E5:2A": "NETGEAR",
-    "2C:30:33": "NETGEAR",
-    "30:B5:C2": "NETGEAR",
-    "44:94:FC": "NETGEAR",
-    "6C:4B:90": "NETGEAR",
-    "9C:3D:CF": "NETGEAR",
-    "A4:2B:8C": "NETGEAR",
-    # ASUS
-    "00:0C:6E": "ASUS",
-    "00:0E:A6": "ASUS",
-    "00:11:2F": "ASUS",
-    "00:13:D4": "ASUS",
-    "00:15:F2": "ASUS",
-    "00:17:31": "ASUS",
-    "00:18:F3": "ASUS",
-    "00:1A:92": "ASUS",
-    "00:1D:60": "ASUS",
-    "00:1E:8C": "ASUS",
-    "00:1F:C6": "ASUS",
-    "00:22:15": "ASUS",
-    "00:23:54": "ASUS",
-    "00:24:8C": "ASUS",
-    "00:25:22": "ASUS",
-    "00:26:18": "ASUS",
-    "10:02:B5": "ASUS",
-    "10:BF:48": "ASUS",
-    "14:DA:E9": "ASUS",
-    "1C:87:2C": "ASUS",
-    "2C:56:DC": "ASUS",
-    "30:85:A9": "ASUS",
-    "3C:97:0E": "ASUS",
-    "40:16:7E": "ASUS",
-    "48:5B:39": "ASUS",
-    "50:46:5D": "ASUS",
-    "54:04:A6": "ASUS",
-    "60:45:CB": "ASUS",
-    "6C:72:20": "ASUS",
-    "74:D0:2B": "ASUS",
-    "88:D7:F6": "ASUS",
-    "90:E6:BA": "ASUS",
-    "94:DE:80": "ASUS",
-    "A8:5E:45": "ASUS",
-    "AC:22:0B": "ASUS",
-    "B0:6E:BF": "ASUS",
-    "BC:AE:C5": "ASUS",
-    "C8:60:00": "ASUS",
-    "D0:17:C2": "ASUS",
-    "E0:3F:49": "ASUS",
-    "E8:9F:80": "ASUS",
-    "F0:2F:74": "ASUS",
-    # D-Link
-    "00:05:5D": "D-Link",
-    "00:0D:88": "D-Link",
-    "00:0F:3D": "D-Link",
-    "00:11:95": "D-Link",
-    "00:13:46": "D-Link",
-    "00:15:E9": "D-Link",
-    "00:17:9A": "D-Link",
-    "00:19:5B": "D-Link",
-    "00:1B:11": "D-Link",
-    "00:1C:F0": "D-Link",
-    "00:1E:58": "D-Link",
-    "00:21:91": "D-Link",
-    "00:22:B0": "D-Link",
-    "00:24:01": "D-Link",
-    "00:26:5A": "D-Link",
-    "14:D6:4D": "D-Link",
-    "1C:7E:E5": "D-Link",
-    "28:10:7B": "D-Link",
-    "34:08:04": "D-Link",
-    "5C:D9:98": "D-Link",
-    "6C:72:20": "D-Link",
-    "78:54:2E": "D-Link",
-    "84:C9:B2": "D-Link",
-    "90:2B:34": "D-Link",
-    "A0:AB:1B": "D-Link",
-    "BC:F6:85": "D-Link",
-    "C8:BE:19": "D-Link",
-    # Ubiquiti
-    "00:15:6D": "Ubiquiti",
-    "00:27:22": "Ubiquiti",
-    "04:18:D6": "Ubiquiti",
-    "18:E8:29": "Ubiquiti",
-    "24:A4:3C": "Ubiquiti",
-    "44:D9:E7": "Ubiquiti",
-    "68:72:51": "Ubiquiti",
-    "74:83:C2": "Ubiquiti",
-    "78:8A:20": "Ubiquiti",
-    "80:2A:A8": "Ubiquiti",
-    "B4:FB:E4": "Ubiquiti",
-    "DC:9F:DB": "Ubiquiti",
-    "E0:63:DA": "Ubiquiti",
-    "F0:9F:C2": "Ubiquiti",
-    "FC:EC:DA": "Ubiquiti",
-    "00:AA:BB": "Ubiquiti",
-    "24:5A:4C": "Ubiquiti",
-    "60:22:32": "Ubiquiti",
-    # Huawei
-    "00:18:82": "Huawei",
-    "00:1E:10": "Huawei",
-    "00:22:A1": "Huawei",
-    "00:25:9E": "Huawei",
-    "04:25:C5": "Huawei",
-    "04:BD:70": "Huawei",
-    "0C:37:DC": "Huawei",
-    "10:1B:54": "Huawei",
-    "14:B9:68": "Huawei",
-    "20:08:ED": "Huawei",
-    "20:2B:C1": "Huawei",
-    "20:F3:A3": "Huawei",
-    "24:DF:6A": "Huawei",
-    "28:31:52": "Huawei",
-    "2C:AB:00": "Huawei",
-    "34:6B:D3": "Huawei",
-    "38:B1:DB": "Huawei",
-    "40:4D:8E": "Huawei",
-    "48:00:31": "Huawei",
-    "4C:1F:CC": "Huawei",
-    "54:51:1B": "Huawei",
-    "5C:C3:07": "Huawei",
-    "60:DE:44": "Huawei",
-    "64:3E:8C": "Huawei",
-    "68:8A:F0": "Huawei",
-    "6C:8D:C1": "Huawei",
-    "70:72:3C": "Huawei",
-    # Xiaomi / Mi
-    "00:9E:C8": "Xiaomi",
-    "04:CF:8C": "Xiaomi",
-    "0C:1D:AF": "Xiaomi",
-    "10:2A:B3": "Xiaomi",
-    "14:F6:5A": "Xiaomi",
-    "18:59:36": "Xiaomi",
-    "20:82:C0": "Xiaomi",
-    "28:6C:07": "Xiaomi",
-    "2C:4D:54": "Xiaomi",
-    "34:80:B3": "Xiaomi",
-    "38:A4:ED": "Xiaomi",
-    "3C:BD:D8": "Xiaomi",
-    "50:64:2B": "Xiaomi",
-    "58:44:98": "Xiaomi",
-    "64:09:80": "Xiaomi",
-    "64:B4:73": "Xiaomi",
-    "68:DF:DD": "Xiaomi",
-    "74:51:BA": "Xiaomi",
-    "78:02:F8": "Xiaomi",
-    "78:11:DC": "Xiaomi",
-    "7C:1D:D9": "Xiaomi",
-    "8C:BE:BE": "Xiaomi",
-    "98:FA:E3": "Xiaomi",
-    "9C:99:A0": "Xiaomi",
-    "A0:86:C6": "Xiaomi",
-    "AC:C1:EE": "Xiaomi",
-    "B0:E2:35": "Xiaomi",
-    "C4:0B:CB": "Xiaomi",
-    "D4:97:0B": "Xiaomi",
-    "F4:8E:08": "Xiaomi",
-    # Google
-    "F4:F5:D8": "Google",
-    "54:60:09": "Google",
-    "3C:28:6D": "Google",
-    "1A:55:A4": "Google",
-    "48:D6:D5": "Google",
-    "20:DF:B9": "Google",
-    "DA:E5:F9": "Google",
-    "7C:2E:BD": "Google",
-    "B4:CE:F6": "Google",
-    "F0:EF:86": "Google",
-    # AVM (FRITZ!Box)
-    "00:04:0E": "AVM",
-    "C4:A8:1D": "AVM",
-    "DC:39:6F": "AVM",
-    "E4:67:70": "AVM",
-    "9C:C7:A6": "AVM",
-    "00:24:FE": "AVM",
-    "3C:A1:0D": "AVM",
-    "5C:49:79": "AVM",
-    "74:31:70": "AVM",
-    "A0:24:EC": "AVM",
-    "A8:17:58": "AVM",
-    # Linksys
-    "00:03:6C": "Linksys",
-    "00:06:25": "Linksys",
-    "00:0C:41": "Linksys",
-    "00:0F:66": "Linksys",
-    "00:12:17": "Linksys",
-    "00:13:10": "Linksys",
-    "00:14:BF": "Linksys",
-    "00:16:B6": "Linksys",
-    "00:18:39": "Linksys",
-    "00:1A:70": "Linksys",
-    "00:1C:10": "Linksys",
-    "00:1D:7E": "Linksys",
-    "00:1E:E5": "Linksys",
-    "00:21:29": "Linksys",
-    "00:22:6B": "Linksys",
-    "00:23:69": "Linksys",
-    "00:25:9C": "Linksys",
-    "20:AA:4B": "Linksys",
-    "58:6D:8F": "Linksys",
-    "68:7F:74": "Linksys",
-    # Eero
-    "F8:BB:BF": "Eero",
-    "64:FF:0A": "Eero",
-    "F0:5C:19": "Eero",
-    "50:91:E3": "Eero",
-    "6C:19:C0": "Eero",
-    # Qualcomm/Atheros (NICs)
-    "00:03:7F": "Atheros",
-    "00:05:88": "Atheros",
-    # MediaTek/Ralink
-    "00:0C:43": "Ralink/MT",
-    "00:21:F7": "Ralink/MT",
-    # Realtek
-    "00:E0:4C": "Realtek",
-    "52:54:00": "QEMU/VBox",
-}
-
 _oui_full: Optional[Dict[str, str]] = None
 _oui_loaded = False
 
 # Path where we save the downloaded IEEE OUI database
 OUI_DATA_DIR = Path.home() / ".local" / "share" / "wavescope"
 OUI_JSON_PATH = OUI_DATA_DIR / "oui.json"
+OUI_EMBEDDED_JSON_PATH = Path(__file__).resolve().parent / "assets" / "oui.json"
 OUI_IEEE_URL = "https://standards-oui.ieee.org/"
 OUI_IEEE_RE = re.compile(r"([0-9A-F]{2}-[0-9A-F]{2}-[0-9A-F]{2})\s+\(hex\)\s+(.+?)\n")
 
@@ -801,6 +436,19 @@ def _load_downloaded_oui() -> Dict[str, str]:
     try:
         raw: Dict[str, str] = json.loads(OUI_JSON_PATH.read_text(encoding="utf-8"))
         # Normalise keys to AA:BB:CC form (may be stored as AA-BB-CC)
+        return {k.replace("-", ":").upper(): v for k, v in raw.items()}
+    except Exception:
+        return {}
+
+
+def _load_embedded_oui() -> Dict[str, str]:
+    """Load bundled OUI JSON from assets as offline fallback. Returns {} on failure."""
+    if not OUI_EMBEDDED_JSON_PATH.exists():
+        return {}
+    try:
+        raw: Dict[str, str] = json.loads(
+            OUI_EMBEDDED_JSON_PATH.read_text(encoding="utf-8")
+        )
         return {k.replace("-", ":").upper(): v for k, v in raw.items()}
     except Exception:
         return {}
@@ -843,14 +491,14 @@ def _load_system_oui() -> Dict[str, str]:
 def reload_oui_db():
     """Force reload of the OUI database (call after a fresh download)."""
     global _oui_full, _oui_loaded
-    _oui_full = _load_downloaded_oui() or _load_system_oui()
+    _oui_full = _load_downloaded_oui() or _load_embedded_oui() or _load_system_oui()
     _oui_loaded = True
 
 
 def get_manufacturer(bssid: str) -> str:
     global _oui_full, _oui_loaded
     if not _oui_loaded:
-        _oui_full = _load_downloaded_oui() or _load_system_oui()
+        _oui_full = _load_downloaded_oui() or _load_embedded_oui() or _load_system_oui()
         _oui_loaded = True
     if not bssid:
         return ""
@@ -858,7 +506,7 @@ def get_manufacturer(bssid: str) -> str:
     prefix = mac[:8]
     if _oui_full and prefix in _oui_full:
         return _oui_full[prefix]
-    return _EMBEDDED_OUI.get(prefix, "")
+    return ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1433,7 +1081,7 @@ COL_BAND = 4
 COL_CHAN = 5
 COL_FREQ = 6
 COL_BW = 7
-COL_SPAN = 8   # Channel span, e.g. "116–128" for ch116@80MHz on 5 GHz
+COL_SPAN = 8  # Channel span, e.g. "116–128" for ch116@80MHz on 5 GHz
 COL_SIG = 9
 COL_DBM = 10
 COL_RATE = 11
@@ -1825,31 +1473,94 @@ class DbmAxisItem(pg.AxisItem):
 #   U-NII-4  (5850–5925 MHz)  ch 169–177  — proposed / limited use
 _UNII_CHAN_COLORS: Dict[int, str] = {}
 for _ch in [32, 36, 40, 44, 48]:
-    _UNII_CHAN_COLORS[_ch] = "#81c995"   # U-NII-1  — soft green
+    _UNII_CHAN_COLORS[_ch] = "#81c995"  # U-NII-1  — soft green
 for _ch in [52, 56, 60, 64]:
-    _UNII_CHAN_COLORS[_ch] = "#64b5f6"   # U-NII-2A — soft blue
+    _UNII_CHAN_COLORS[_ch] = "#64b5f6"  # U-NII-2A — soft blue
 for _ch in [100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144]:
-    _UNII_CHAN_COLORS[_ch] = "#ffcc80"   # U-NII-2C — soft amber
+    _UNII_CHAN_COLORS[_ch] = "#ffcc80"  # U-NII-2C — soft amber
 for _ch in [149, 153, 157, 161, 165]:
-    _UNII_CHAN_COLORS[_ch] = "#a5d6a7"   # U-NII-3  — lighter green
+    _UNII_CHAN_COLORS[_ch] = "#a5d6a7"  # U-NII-3  — lighter green
 for _ch in [169, 173, 177]:
-    _UNII_CHAN_COLORS[_ch] = "#ef9a9a"   # U-NII-4  — light red (proposed)
+    _UNII_CHAN_COLORS[_ch] = "#ef9a9a"  # U-NII-4  — light red (proposed)
+
+# Sub-band name → colour (for second-level tick labels on 5 GHz x-axis)
+_UNII_NAME_COLORS: Dict[str, str] = {
+    "U-NII-1": "#81c995",
+    "U-NII-2A": "#64b5f6",
+    "U-NII-2C": "#ffcc80",
+    "U-NII-3": "#a5d6a7",
+    "U-NII-4": "#ef9a9a",
+    "U-NII-5": "#81c995",
+    "U-NII-6": "#64b5f6",
+    "U-NII-7": "#ffcc80",
+    "U-NII-8": "#ef9a9a",
+}
+
+# Sub-band header strip definitions for each WiFi band.
+# Each tuple: (x_start_MHz, x_end_MHz, hex_fill_color, short_label)
+_BAND_SUBBAND_HEADERS: Dict[str, List[Tuple[float, float, str, str]]] = {
+    "2.4 GHz": [
+        (2400.0, 2500.0, "#8a9bb0", "ISM"),
+    ],
+    "5 GHz": [
+        (5150.0, 5250.0, "#81c995", "U-NII-1"),
+        (5250.0, 5350.0, "#64b5f6", "U-NII-2A"),
+        (5470.0, 5730.0, "#ffcc80", "U-NII-2C"),
+        (5730.0, 5850.0, "#a5d6a7", "U-NII-3"),
+        (5850.0, 5925.0, "#ef9a9a", "U-NII-4"),
+    ],
+    "6 GHz": [
+        (5925.0, 6425.0, "#81c995", "U-NII-5"),
+        (6425.0, 6525.0, "#64b5f6", "U-NII-6"),
+        (6525.0, 6875.0, "#ffcc80", "U-NII-7"),
+        (6875.0, 7125.0, "#ef9a9a", "U-NII-8"),
+    ],
+}
+
+# 6 GHz channel → U-NII sub-band colour  (5950 + ch*5 MHz)
+_UNII6_CHAN_COLORS: Dict[int, str] = {}
+for _ch in range(1, 94, 4):  # U-NII-5  (5955–6415 MHz)
+    _UNII6_CHAN_COLORS[_ch] = "#81c995"
+for _ch in range(97, 114, 4):  # U-NII-6  (6435–6515 MHz)
+    _UNII6_CHAN_COLORS[_ch] = "#64b5f6"
+for _ch in range(117, 186, 4):  # U-NII-7  (6535–6875 MHz)
+    _UNII6_CHAN_COLORS[_ch] = "#ffcc80"
+for _ch in range(189, 234, 4):  # U-NII-8  (6895–7115 MHz)
+    _UNII6_CHAN_COLORS[_ch] = "#ef9a9a"
 
 
 class FiveGhzBottomAxisItem(pg.AxisItem):
-    """
-    Custom x-axis for the 5 GHz panel.
-    Tick labels are colour-coded by U-NII sub-band so the spectrum layout
-    is immediately recognisable at a glance.
-    """
+    """X-axis for the 5 GHz panel — tick labels colour-coded by U-NII sub-band."""
+
+    _CHAN_COLORS = _UNII_CHAN_COLORS
+    _DRAW_DFS_SEGMENT = True
+    _DFS_FREQ_RANGE = (5260.0, 5720.0)  # ch52 .. ch144 centers
 
     def drawPicture(self, p, axisSpec, tickSpecs, textSpecs):
         p.save()
         p.setRenderHint(p.RenderHint.Antialiasing, False)
         p.setRenderHint(p.RenderHint.TextAntialiasing, True)
         pen, p1, p2 = axisSpec
-        p.setPen(pen)
+        base_pen = pen
+        if base_pen is None:
+            c = QColor("#8a96b0")
+            c.setAlpha(140)
+            base_pen = pg.mkPen(c, width=1)
+        p.setPen(base_pen)
         p.drawLine(p1, p2)
+        if self._DRAW_DFS_SEGMENT and self.orientation == "bottom":
+            dfs_lo, dfs_hi = self._DFS_FREQ_RANGE
+            v1 = self.mapFromView(QPointF(dfs_lo, 0.0))
+            v2 = self.mapFromView(QPointF(dfs_hi, 0.0))
+            x_min = min(p1.x(), p2.x())
+            x_max = max(p1.x(), p2.x())
+            dfs_x1 = max(min(v1.x(), v2.x()), x_min)
+            dfs_x2 = min(max(v1.x(), v2.x()), x_max)
+            if dfs_x2 > dfs_x1:
+                dfs_pen = QColor("#64b5f6")
+                dfs_pen.setAlpha(255)
+                p.setPen(pg.mkPen(dfs_pen, width=2))
+                p.drawLine(QPointF(dfs_x1, p1.y()), QPointF(dfs_x2, p2.y()))
         for pen, p1, p2 in tickSpecs:
             p.setPen(pen)
             p.drawLine(p1, p2)
@@ -1857,14 +1568,22 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
             p.setFont(self.style["tickFont"])
         default_pen = self.style.get("pen") or pg.mkPen("#8a96b0")
         for rect, flags, text in textSpecs:
+            clean_text = text.strip()
             try:
-                ch = int(text)
-                hex_c = _UNII_CHAN_COLORS.get(ch)
+                ch = int(clean_text)
+                hex_c = self._CHAN_COLORS.get(ch)
             except ValueError:
-                hex_c = None
+                hex_c = _UNII_NAME_COLORS.get(clean_text)
             p.setPen(pg.mkPen(hex_c) if hex_c else default_pen)
             p.drawText(rect, int(flags), text)
         p.restore()
+
+
+class SixGhzBottomAxisItem(FiveGhzBottomAxisItem):
+    """X-axis for the 6 GHz panel — tick labels colour-coded by U-NII sub-band."""
+
+    _CHAN_COLORS = _UNII6_CHAN_COLORS
+    _DRAW_DFS_SEGMENT = False
 
 
 # ─── Clickable label for channel graph ───────────────────────────────────────
@@ -1911,7 +1630,7 @@ class ChannelGraphWidget(QWidget):
     _BAND_TICK_STRIDE: Dict[str, int] = {
         "2.4 GHz": 1,  # 14 channels → show all
         "5 GHz": 1,  # ~36 channels → show all
-        "6 GHz": 1,  # handled via _BAND_TICK_SET override below
+        "6 GHz": 1,  # ch 1,5,9,…,233 (all 20 MHz primaries)
     }
     # For 6 GHz: show the 80/160/320 MHz anchor channels used by Wi-Fi 6E/7 APs
     # These are the standard 6 GHz preferred scanning channels (PSC) for 20 MHz:
@@ -1961,6 +1680,9 @@ class ChannelGraphWidget(QWidget):
         self._theme_bg = "#0d1117"
         self._theme_fg = "#a9b4cc"
         self._band_channels: Dict[str, Dict[float, int]] = {}  # band → {freq_mhz: chan}
+        self._view_ranges: Dict[
+            str, Tuple[Tuple[float, float], Tuple[float, float]]
+        ] = {}
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -1971,10 +1693,11 @@ class ChannelGraphWidget(QWidget):
             pw.setBackground(bg)
             if i == 0:
                 pw.setLabel("left", "Signal (dBm)", color=fg, size="10pt")
-            pw.setLabel("bottom", band, color=fg, size="10pt")
             for ax in ("left", "bottom"):
                 pw.getAxis(ax).setTextPen(fg)
                 pw.getAxis(ax).setPen(fg)
+        # Redraw so band-label TextItems inside the plot pick up the new fg
+        self._redraw()
 
     def set_band(self, band: str):
         self._band = band
@@ -2000,6 +1723,8 @@ class ChannelGraphWidget(QWidget):
             axis_items["left"] = DbmAxisItem(orientation="left")
         if band == "5 GHz":
             axis_items["bottom"] = FiveGhzBottomAxisItem(orientation="bottom")
+        elif band == "6 GHz":
+            axis_items["bottom"] = SixGhzBottomAxisItem(orientation="bottom")
         pw = PlotWidget(axisItems=axis_items)
         pw.setBackground(self._theme_bg)
         pw.showGrid(x=True, y=True, alpha=0.18)
@@ -2007,10 +1732,22 @@ class ChannelGraphWidget(QWidget):
         if is_leftmost:
             pw.setLabel("left", "Signal (dBm)", color=fg, size="10pt")
         else:
-            pw.getAxis("left").setWidth(0)
-            pw.getAxis("left").hide()
-        pw.setLabel("bottom", band, color=fg, size="10pt")
-        pw.getAxis("bottom").setTextPen(fg)
+            # Keep axis present (needed for y-grid lines) but invisible.
+            # setWidth must be ≥1 — width=0 gives a zero bounding rect and
+            # Qt skips painting the item entirely, suppressing grid lines.
+            ax = pw.getAxis("left")
+            ax.setWidth(1)
+            ax.setStyle(showValues=False, tickLength=0)
+            grid_pen = QColor(self._theme_fg)
+            grid_pen.setAlpha(80)
+            ax.setPen(pg.mkPen(grid_pen))
+        # Bottom axis: two text rows (channels + sub-band labels)
+        bottom_ax = pw.getAxis("bottom")
+        bottom_ax.setTextPen(fg)
+        axis_line_c = QColor(fg)
+        axis_line_c.setAlpha(140)
+        bottom_ax.setPen(pg.mkPen(axis_line_c, width=1))
+        bottom_ax.setHeight(56)
         pw.setMenuEnabled(False)
         pw.getViewBox().setMouseEnabled(x=True, y=False)
         pw.scene().sigMouseClicked.connect(self._on_bg_click)
@@ -2032,6 +1769,59 @@ class ChannelGraphWidget(QWidget):
             self._plots[band] = pw
 
         self._active_bands = list(bands)
+
+    # ── Sub-band header strips ────────────────────────────────────────────────
+
+    def _draw_band_overlays(
+        self, band: str, pw: "PlotWidget", xmin: float, xmax: float
+    ):
+        """Band name label in the top-right corner."""
+        floor = float(CHAN_DBM_FLOOR)
+
+        # 5 GHz DFS highlight (ch52..144): draw directly on the plot floor so it
+        # is visible in the canvas, not only in the axis widget area.
+        if band == "5 GHz":
+            dfs_lo = max(5260.0, xmin)
+            dfs_hi = min(5720.0, xmax)
+            if dfs_hi > dfs_lo:
+                dfs_color = QColor("#a952bd")
+                dfs_color.setAlpha(235)
+                dfs_line = pg.PlotCurveItem(
+                    [dfs_lo, dfs_hi],
+                    [floor + 0.15, floor + 0.15],
+                    pen=pg.mkPen(dfs_color, width=2),
+                )
+                dfs_line.setZValue(20)
+                pw.addItem(dfs_line)
+
+                # Small label to explain the highlighted DFS range.
+                dfs_lbl_color = QColor(dfs_color)
+                dfs_lbl_color.setAlpha(240)
+                dfs_lbl = pg.TextItem(
+                    text="DFS (52–144)",
+                    anchor=(0.5, 1.0),
+                    color=dfs_lbl_color,
+                )
+                dfs_font = QFont()
+                dfs_font.setPointSize(7)
+                dfs_font.setBold(True)
+                dfs_lbl.setFont(dfs_font)
+                dfs_lbl.setPos((dfs_lo + dfs_hi) / 2.0, floor + 0.1)
+                dfs_lbl.setZValue(21)
+                pw.addItem(dfs_lbl)
+
+        # -- band name label, just inside top-right corner --
+        band_color = QColor(self._theme_fg)
+        band_color.setAlpha(180)
+        band_lbl = pg.TextItem(text=band, anchor=(1.0, 0.0), color=band_color)
+        bfont = QFont()
+        bfont.setPointSize(8)
+        bfont.setBold(True)
+        band_lbl.setFont(bfont)
+        # anchor (1.0, 0.0) pins top-right of text to this point → text hangs downward
+        band_lbl.setPos(xmax, float(CHAN_DBM_CEIL) - 1.0)
+        band_lbl.setZValue(5)
+        pw.addItem(band_lbl)
 
     def _on_label_click(self, bssid: str):
         self._highlighted = None if self._highlighted == bssid else bssid
@@ -2094,6 +1884,18 @@ class ChannelGraphWidget(QWidget):
         visible = [a for a in self._aps if self._band == "All" or a.band == self._band]
         needed = self._needed_bands(visible)
 
+        # Capture current per-band view ranges before any clear/rebuild so zoom/pan
+        # persists across refreshes.
+        for band, pw in self._plots.items():
+            try:
+                xr, yr = pw.getViewBox().viewRange()
+                self._view_ranges[band] = (
+                    (float(xr[0]), float(xr[1])),
+                    (float(yr[0]), float(yr[1])),
+                )
+            except Exception:
+                pass
+
         if needed != self._active_bands:
             self._rebuild_panels(needed)
 
@@ -2120,12 +1922,21 @@ class ChannelGraphWidget(QWidget):
                 # Use the bonded-block center for 5 GHz (not just primary channel)
                 draw_center = get_ap_draw_center(ap)
                 unit = _channel_shape_unit(xs, draw_center, max(ap.bandwidth_mhz, 20))
+                active = unit > 1e-6
+                if not np.any(active):
+                    continue
+                xs_act = xs[active]
+                unit_act = unit[active]
                 ys = floor + (ap.dbm - floor) * unit
+                ys_act = floor + (ap.dbm - floor) * unit_act
+                floor_ys_act = np.full_like(xs_act, float(floor))
 
                 bc = QColor(color)
                 bc.setAlpha(55)
-                zero_item = pg.PlotCurveItem(xs, floor_ys)
-                curve_item = pg.PlotCurveItem(xs, ys, pen=mkPen(color=color, width=2))
+                zero_item = pg.PlotCurveItem(xs_act, floor_ys_act, pen=pg.mkPen(None))
+                curve_item = pg.PlotCurveItem(
+                    xs_act, ys_act, pen=mkPen(color=color, width=2)
+                )
                 fill_item = pg.FillBetweenItem(zero_item, curve_item, brush=mkBrush(bc))
                 pw.addItem(zero_item)
                 pw.addItem(fill_item)
@@ -2157,72 +1968,35 @@ class ChannelGraphWidget(QWidget):
             self._band_channels[band] = {
                 float(f): c for c, f in tick_src.items() if xmin <= f <= xmax
             }
-            # Build channel ticks — use curated anchor-channel set for 6 GHz
-            if band == "6 GHz":
-                allowed = set(self._6GHZ_TICK_CHANS)
-                ticks = [
-                    (float(f), str(c))
-                    for c, f in tick_src.items()
-                    if xmin <= f <= xmax and c in allowed
-                ]
-                ticks.sort()
-            else:
-                stride = self._BAND_TICK_STRIDE.get(band, 1)
-                sorted_chan = sorted(tick_src.items(), key=lambda x: x[1])
-                ticks = [
-                    (f, str(c))
-                    for i, (c, f) in enumerate(sorted_chan)
-                    if xmin <= f <= xmax and i % stride == 0
-                ]
+            # Build channel ticks
+            stride = self._BAND_TICK_STRIDE.get(band, 1)
+            sorted_chan = sorted(tick_src.items(), key=lambda x: x[1])
+            ticks = [
+                (f, str(c))
+                for i, (c, f) in enumerate(sorted_chan)
+                if xmin <= f <= xmax and i % stride == 0
+            ]
             if ticks:
-                pw.getAxis("bottom").setTicks([ticks])
+                subband_ticks = [
+                    (((x0 + x1) / 2.0), "\n" + lbl)
+                    for x0, x1, _c, lbl in _BAND_SUBBAND_HEADERS.get(band, [])
+                    if xmin <= ((x0 + x1) / 2.0) <= xmax
+                ]
+                mixed_ticks = sorted(ticks + subband_ticks, key=lambda t: t[0])
+                pw.getAxis("bottom").setTicks([mixed_ticks])
 
             # ── Band-specific spectrum annotations ─────────────────────────
-            if band == "5 GHz":
-                # DFS channels — thin amber bar along the bottom edge
-                dfs_bar = pg.PlotCurveItem(
-                    [5250, 5730],
-                    [floor, floor],
-                    pen=pg.mkPen(QColor(255, 170, 30), width=5),
-                )
-                dfs_bar.setZValue(10)
-                pw.addItem(dfs_bar)
+            self._draw_band_overlays(band, pw, xmin, xmax)
 
-            elif band == "6 GHz":
-                # ── UNII sub-band markers ──────────────────────────────────
-                # UNII-5 (5925–6425 MHz): Low-Power Indoor + VLP, no AFC needed
-                # UNII-6 (6425–6525 MHz): Standard Power, AFC required
-                # UNII-7 (6525–6875 MHz): Standard Power, AFC required
-                # UNII-8 (6875–7125 MHz): Standard Power, AFC required
-                _UNII_SEGMENTS = [
-                    (5925, 6425, QColor("#26a65b"), "UNII-5 (LPI)"),  # green
-                    (6425, 6525, QColor("#e67e22"), "UNII-6 (AFC)"),  # orange
-                    (6525, 6875, QColor("#e67e22"), "UNII-7 (AFC)"),  # orange
-                    (6875, 7125, QColor("#e67e22"), "UNII-8 (AFC)"),  # orange
-                ]
-                for seg_start, seg_end, seg_color, seg_label in _UNII_SEGMENTS:
-                    bar = pg.PlotCurveItem(
-                        [seg_start, seg_end],
-                        [floor, floor],
-                        pen=pg.mkPen(seg_color, width=4),
-                    )
-                    bar.setZValue(10)
-                    pw.addItem(bar)
-                # Vertical boundary lines at UNII transitions
-                for boundary_mhz in (6425, 6525, 6875):
-                    vline = pg.InfiniteLine(
-                        pos=boundary_mhz,
-                        angle=90,
-                        pen=pg.mkPen(
-                            QColor(180, 140, 60, 90),
-                            width=1,
-                            style=Qt.PenStyle.DashLine,
-                        ),
-                    )
-                    pw.addItem(vline)
-
-            pw.setXRange(xmin, xmax, padding=0.01)
-            pw.setYRange(floor, CHAN_DBM_CEIL, padding=0.02)
+            # Restore last user zoom/pan if available, otherwise use defaults.
+            vr = self._view_ranges.get(band)
+            if vr:
+                (x0, x1), (y0, y1) = vr
+                pw.setXRange(x0, x1, padding=0.0)
+                pw.setYRange(y0, y1, padding=0.0)
+            else:
+                pw.setXRange(xmin, xmax, padding=0.01)
+                pw.setYRange(floor, CHAN_DBM_CEIL, padding=0.0)
 
         self._apply_highlight()
 
@@ -2452,6 +2226,7 @@ fi
 echo "WAVESCOPE_CLEANUP_OK"
 """
 
+
 class CaptureTypeDialog(QDialog):
     """Small picker — user chooses between Monitor Mode and Managed Mode capture."""
 
@@ -2483,7 +2258,8 @@ class CaptureTypeDialog(QDialog):
             "Disconnects your WiFi and creates a raw monitor interface (mon0).\n"
             "Captures ALL frames on the chosen channel — beacons, probes, data\n"
             "from every nearby device. Best for deep wireless analysis.",
-            "#1a3050", "#1e4a80",
+            "#1a3050",
+            "#1e4a80",
         )
         btn_mon.clicked.connect(lambda: self._pick("monitor"))
         layout.addWidget(btn_mon)
@@ -2494,7 +2270,8 @@ class CaptureTypeDialog(QDialog):
             "Keeps your WiFi connection intact. Captures only traffic\n"
             "to/from this machine on the current network.\n"
             "Ideal for debugging your own connection without losing internet.",
-            "#1a3a1a", "#1e5a22",
+            "#1a3a1a",
+            "#1e5a22",
         )
         btn_mgd.clicked.connect(lambda: self._pick("managed"))
         layout.addWidget(btn_mgd)
@@ -2516,7 +2293,7 @@ class CaptureTypeDialog(QDialog):
 
             def __init__(self, bg, hover):
                 super().__init__()
-                self._bg    = bg
+                self._bg = bg
                 self._hover = hover
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
                 self.setMinimumHeight(110)
@@ -3059,7 +2836,7 @@ class ManagedCaptureWindow(QDialog):
     Only captures traffic to/from this machine. Requires root via pkexec.
     """
 
-    _ST_IDLE    = "idle"
+    _ST_IDLE = "idle"
     _ST_CAPTURE = "capture"
 
     def __init__(self, parent=None):
@@ -3068,18 +2845,18 @@ class ManagedCaptureWindow(QDialog):
         self.setMinimumSize(560, 540)
         self.setModal(False)
 
-        self._state          = self._ST_IDLE
-        self._proc           = None
-        self._cleanup_proc   = None
+        self._state = self._ST_IDLE
+        self._proc = None
+        self._cleanup_proc = None
         self._capture_script = ""
-        self._pid_file       = ""
-        self._stdout_buf     = ""
-        self._start_time     = 0.0
-        self._timer          = QTimer(self)
+        self._pid_file = ""
+        self._stdout_buf = ""
+        self._start_time = 0.0
+        self._timer = QTimer(self)
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
-        self._iface_name     = ""
-        self._output_path    = ""
+        self._iface_name = ""
+        self._output_path = ""
 
         self._build_ui()
         self._populate_interfaces()
@@ -3121,9 +2898,9 @@ class ManagedCaptureWindow(QDialog):
         layout.addLayout(form)
 
         status_row = QHBoxLayout()
-        self._lbl_state   = QLabel("Idle")
+        self._lbl_state = QLabel("Idle")
         self._lbl_elapsed = QLabel("00:00")
-        self._lbl_size    = QLabel("File:  0 KB")
+        self._lbl_size = QLabel("File:  0 KB")
         self._lbl_state.setStyleSheet("color:#88bb88; font-weight:bold;")
         status_row.addWidget(self._lbl_state)
         status_row.addStretch()
@@ -3167,7 +2944,8 @@ class ManagedCaptureWindow(QDialog):
 
     def _browse_output(self):
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Capture File",
+            self,
+            "Save Capture File",
             os.path.expanduser("~/Desktop"),
             "PCAP files (*.pcap);;All files (*)",
         )
@@ -3183,7 +2961,9 @@ class ManagedCaptureWindow(QDialog):
             self._request_stop()
 
     def _start_capture(self):
-        iface  = (self._iface_combo.currentData() or self._iface_combo.currentText()).strip()
+        iface = (
+            self._iface_combo.currentData() or self._iface_combo.currentText()
+        ).strip()
         output = self._out_edit.text().strip()
         if not iface:
             QMessageBox.warning(self, "No Interface", "Select a WiFi interface.")
@@ -3191,7 +2971,7 @@ class ManagedCaptureWindow(QDialog):
         if not output:
             QMessageBox.warning(self, "No Output", "Choose an output file.")
             return
-        self._iface_name  = iface
+        self._iface_name = iface
         self._output_path = output
         self._log.clear()
         self._log_line(f"Interface : {iface}")
@@ -3201,6 +2981,7 @@ class ManagedCaptureWindow(QDialog):
 
     def _run_capture(self):
         import tempfile as _tf
+
         self._pid_file = _tf.mktemp(prefix="wavescope_tdpid_", suffix=".pid")
         script_body = _MANAGED_CAPTURE_TMPL.format(
             iface=self._iface_name,
@@ -3224,14 +3005,18 @@ class ManagedCaptureWindow(QDialog):
         self._log_line("\u25b6  Starting (Polkit authentication may appear\u2026)")
 
     def _on_stdout(self):
-        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(errors="replace")
+        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(
+            errors="replace"
+        )
         while "\n" in self._stdout_buf:
             line, self._stdout_buf = self._stdout_buf.split("\n", 1)
             line = line.strip()
             if not line:
                 continue
             if line == "WAVESCOPE_CAPTURE_OK":
-                self._log_line("\u2713  tcpdump running \u2014 WiFi connection is intact.")
+                self._log_line(
+                    "\u2713  tcpdump running \u2014 WiFi connection is intact."
+                )
                 self._set_state(self._ST_CAPTURE, "Capturing\u2026")
                 self._start_time = time.monotonic()
                 self._timer.start()
@@ -3250,7 +3035,9 @@ class ManagedCaptureWindow(QDialog):
 
     def _on_proc_finished(self, exit_code: int, _exit_status):
         self._timer.stop()
-        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(errors="replace")
+        self._stdout_buf += bytes(self._proc.readAllStandardOutput()).decode(
+            errors="replace"
+        )
         for line in self._stdout_buf.splitlines():
             ln = line.strip()
             if ln and not ln.startswith("WAVESCOPE_"):
@@ -3287,7 +3074,9 @@ class ManagedCaptureWindow(QDialog):
         self._log_line("\u25b6  Cleanup running\u2026")
 
     def _on_cleanup_stdout(self):
-        data = bytes(self._cleanup_proc.readAllStandardOutput()).decode(errors="replace")
+        data = bytes(self._cleanup_proc.readAllStandardOutput()).decode(
+            errors="replace"
+        )
         for line in data.splitlines():
             ln = line.strip()
             if ln == "WAVESCOPE_CLEANUP_OK":
@@ -3316,12 +3105,15 @@ class ManagedCaptureWindow(QDialog):
 
     def _force_kill(self):
         from PyQt6.QtCore import QProcess
+
         if (
             self._state != self._ST_IDLE
             and self._proc
             and self._proc.state() != QProcess.ProcessState.NotRunning
         ):
-            self._log_line("\u26a0  Still running after 20 s \u2014 force-killing\u2026")
+            self._log_line(
+                "\u26a0  Still running after 20 s \u2014 force-killing\u2026"
+            )
             self._proc.kill()
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -3381,6 +3173,7 @@ class ManagedCaptureWindow(QDialog):
 
     def _make_process(self):
         from PyQt6.QtCore import QProcess
+
         p = QProcess(self)
         p.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
         return p
@@ -3416,8 +3209,8 @@ class MainWindow(QMainWindow):
 
         self._aps: List[AccessPoint] = []
         # Cache for iw-enriched fields — persisted across up to 5 missed cycles
-        self._iw_cache: Dict[str, dict] = {}   # bssid.lower() → field snapshot
-        self._iw_miss: Dict[str, int] = {}     # bssid.lower() → consecutive-miss count
+        self._iw_cache: Dict[str, dict] = {}  # bssid.lower() → field snapshot
+        self._iw_miss: Dict[str, int] = {}  # bssid.lower() → consecutive-miss count
         self._scanner = WiFiScanner(interval_sec=2)
         self._scanner.data_ready.connect(self._on_data)
         self._scanner.scan_error.connect(self._on_error)
@@ -3729,8 +3522,17 @@ class MainWindow(QMainWindow):
 
     # Fields populated exclusively by enrich_with_iw — persist across missed cycles
     _IW_PERSIST_FIELDS = (
-        "dbm_exact", "wifi_gen", "chan_util", "station_count",
-        "pmf", "akm", "rrm", "btm", "ft", "country", "iw_center_freq",
+        "dbm_exact",
+        "wifi_gen",
+        "chan_util",
+        "station_count",
+        "pmf",
+        "akm",
+        "rrm",
+        "btm",
+        "ft",
+        "country",
+        "iw_center_freq",
     )
 
     def _on_data(self, aps: List[AccessPoint]):
@@ -3741,7 +3543,9 @@ class MainWindow(QMainWindow):
             key = ap.bssid.lower()
             if ap.pmf != "":
                 # iw enriched this AP — refresh cache, reset miss counter
-                self._iw_cache[key] = {f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS}
+                self._iw_cache[key] = {
+                    f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS
+                }
                 self._iw_miss[key] = 0
             elif key in self._iw_cache and self._iw_miss.get(key, 0) < 5:
                 # iw missed this AP but we have recent data — restore it
@@ -3812,7 +3616,9 @@ class MainWindow(QMainWindow):
         self._user_sized_cols.add(col)
 
     def _on_band_change(self, band: str):
-        self._proxy.set_band(band)  # → invalidateFilter → layoutChanged → _on_filter_changed
+        self._proxy.set_band(
+            band
+        )  # → invalidateFilter → layoutChanged → _on_filter_changed
         self._channel_graph.set_band(band)
 
     def _on_interval_change(self, idx: int):

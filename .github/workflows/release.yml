@@ -3,7 +3,7 @@ name: Build & Release packages
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - "v*.*.*"
 
 jobs:
   # ── Debian / Ubuntu ─────────────────────────────────────────────────────────

@@ -137,6 +137,16 @@ sudo dnf install ./wavescope_*.rpm
 
 ## Changelog
 
+### v1.4.0 — 2026-02-22
+
+#### Highlights
+- Improved channel graph readability and consistency across 2.4 / 5 / 6 GHz panels.
+- Added clear U-NII / ISM labels under channel ticks and improved 6 GHz channel coverage on the x-axis.
+- Added DFS visual indication on 5 GHz so DFS channels are easier to identify.
+- Added 6 GHz bonded-channel lookup tables for more accurate center/span rendering.
+- Channel graph now preserves your zoom/pan view when data refreshes.
+- Switched offline manufacturer fallback to bundled `assets/oui.json` (downloaded database still preferred when available).
+
 ### v1.3.1 — 2026-02-22
 
 #### New features
