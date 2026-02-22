@@ -55,6 +55,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QFileDialog,
     QPlainTextEdit,
+    QListWidget,
+    QListWidgetItem,
 )
 from PyQt6.QtCore import (
     Qt,
@@ -98,7 +100,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -464,6 +466,22 @@ _MANUF_DISPLAY_SUFFIXES = {
 
 def format_manufacturer_display(vendor: str) -> str:
     """Display-only manufacturer cleanup; never modifies DB values."""
+
+    def _prettify_word(word: str) -> str:
+        m = re.match(r"^([^A-Za-z0-9]*)([A-Za-z0-9][A-Za-z0-9'&\-/\.]*)([^A-Za-z0-9]*)$", word)
+        if not m:
+            return word
+        prefix, core, suffix = m.groups()
+        if len(core) <= 4:
+            return word
+        if core != core.upper():
+            return word
+        if re.search(r"\d", core):
+            return word
+        if not re.search(r"[A-Z]", core):
+            return word
+        return f"{prefix}{core.capitalize()}{suffix}"
+
     text = (vendor or "").strip()
     if not text:
         return ""
@@ -475,7 +493,9 @@ def format_manufacturer_display(vendor: str) -> str:
             continue
         break
     cleaned = " ".join(parts).strip(" ,")
-    return cleaned or text
+    if not cleaned:
+        return text
+    return " ".join(_prettify_word(w) for w in cleaned.split())
 
 
 _VENDOR_NOISE_TOKENS = {
@@ -1042,6 +1062,36 @@ class AccessPoint:
     ft: bool = False  # 802.11r Fast Transition
     country: str = ""  # Country code from beacon (e.g. "DE")
     iw_center_freq: Optional[int] = None  # bonded-block center MHz from iw (all bands)
+    beacon_interval_tu: Optional[int] = None  # Beacon interval in TU
+    dtim_period: Optional[int] = None  # DTIM period from beacon TIM IE
+    rsn_capabilities: str = ""  # Parsed RSN capabilities text
+    vendor_ie_ouis: str = ""  # Vendor-specific IE OUIs seen in beacon
+    phy_cap_summary: str = ""  # HT/VHT/HE/EHT families + max width summary
+    he_eht_features: str = ""  # HE/EHT extras (BSS color, TWT, spatial reuse)
+    # ── Connected-session telemetry (iw link / iw station dump) ────────────
+    conn_iface: str = ""
+    conn_link_ssid: str = ""
+    conn_link_freq_mhz: Optional[int] = None
+    conn_link_signal_dbm: Optional[float] = None
+    conn_rx_bitrate: str = ""
+    conn_tx_bitrate: str = ""
+    conn_expected_tp: str = ""
+    conn_signal_avg_dbm: Optional[int] = None
+    conn_tx_retries: Optional[int] = None
+    conn_tx_failed: Optional[int] = None
+    conn_inactive_ms: Optional[int] = None
+    conn_connected_time_s: Optional[int] = None
+    conn_tx_packets: Optional[int] = None
+    conn_tx_bytes: Optional[int] = None
+    conn_rx_packets: Optional[int] = None
+    conn_rx_bytes: Optional[int] = None
+    conn_rx_drop_misc: Optional[int] = None
+    conn_rx_phy: str = ""
+    conn_tx_phy: str = ""
+    conn_tx_retry_rate_pct: Optional[float] = None
+    conn_tx_fail_rate_pct: Optional[float] = None
+    conn_survey_busy_pct: Optional[float] = None
+    conn_survey_noise_dbm: Optional[int] = None
     # ── Computed in __post_init__ ────────────────────────────────────────────
     band: str = field(init=False)
     manufacturer: str = field(init=False)
@@ -1319,6 +1369,74 @@ _IW_GEN_COLORS = {
 }
 
 
+def _decode_rsn_capabilities(raw_caps: str) -> str:
+    """Decode RSN Capabilities using IEEE RSN Capabilities bit definitions."""
+    text = (raw_caps or "").strip()
+    if not text:
+        return ""
+
+    hex_m = re.search(r"0x[0-9a-f]+", text, re.IGNORECASE)
+    if not hex_m:
+        # Fallback when driver exposes only tokenized text
+        fallback: List[str] = []
+        if re.search(r"\bMFP-required\b", text, re.IGNORECASE):
+            fallback.append("PMF required")
+        elif re.search(r"\bMFP-capable\b", text, re.IGNORECASE):
+            fallback.append("PMF capable")
+        if re.search(r"\bPreAuth\b", text, re.IGNORECASE):
+            fallback.append("Pre-authentication")
+        if re.search(r"\bNoPairwise\b", text, re.IGNORECASE):
+            fallback.append("No pairwise cipher")
+        if re.search(r"\bPeerkey\b", text, re.IGNORECASE):
+            fallback.append("PeerKey")
+        if re.search(r"\bSPP-AMSDU-capable\b", text, re.IGNORECASE):
+            fallback.append("SPP-A-MSDU capable")
+        if re.search(r"\bSPP-AMSDU-required\b", text, re.IGNORECASE):
+            fallback.append("SPP-A-MSDU required")
+        if re.search(r"\bPBAC\b", text, re.IGNORECASE):
+            fallback.append("PBAC")
+        if re.search(r"\bExtended-Key-ID\b|\bExtKeyID\b", text, re.IGNORECASE):
+            fallback.append("Extended Key ID")
+        if re.search(r"\bOCVC\b", text, re.IGNORECASE):
+            fallback.append("OCVC")
+        return ", ".join(fallback) if fallback else text
+
+    caps = int(hex_m.group(0), 16) & 0xFFFF
+    replay_map = {0: 1, 1: 2, 2: 4, 3: 16}
+
+    decoded: List[str] = []
+    if caps & (1 << 0):
+        decoded.append("Pre-authentication")
+    if caps & (1 << 1):
+        decoded.append("No pairwise cipher")
+
+    ptk_rc = replay_map[(caps >> 2) & 0x3]
+    gtk_rc = replay_map[(caps >> 4) & 0x3]
+    decoded.append(f"PTKSA replay counters: {ptk_rc}")
+    decoded.append(f"GTKSA replay counters: {gtk_rc}")
+
+    if caps & (1 << 6):
+        decoded.append("PMF capable")
+    if caps & (1 << 7):
+        decoded.append("PMF required")
+    if caps & (1 << 8):
+        decoded.append("Joint multi-band RSNA")
+    if caps & (1 << 9):
+        decoded.append("PeerKey")
+    if caps & (1 << 10):
+        decoded.append("SPP-A-MSDU capable")
+    if caps & (1 << 11):
+        decoded.append("SPP-A-MSDU required")
+    if caps & (1 << 12):
+        decoded.append("PBAC")
+    if caps & (1 << 13):
+        decoded.append("Extended Key ID")
+
+    # Keep raw value only as a compact suffix for transparency/debugging.
+    decoded.append(f"RSN caps {hex_m.group(0).upper()}")
+    return ", ".join(decoded)
+
+
 def parse_iw_scan(output: str) -> Dict[str, dict]:
     """
     Parse the text output of 'iw dev <iface> scan dump' into a dict
@@ -1360,6 +1478,38 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             d["wifi_gen"] = "WiFi 4"
         else:
             d["wifi_gen"] = ""
+
+        fam: List[str] = []
+        if has_ht:
+            fam.append("HT")
+        if has_vht:
+            fam.append("VHT")
+        if has_he:
+            fam.append("HE")
+        if has_eht:
+            fam.append("EHT")
+        width_vals = [
+            int(x)
+            for x in re.findall(r"\b(20|40|80|160|320)\s*MHz\b", text, re.IGNORECASE)
+        ]
+        cap_bits: List[str] = []
+        if fam:
+            cap_bits.append("/".join(fam))
+        if width_vals:
+            cap_bits.append(f"max width {max(width_vals)} MHz")
+        if cap_bits:
+            d["phy_cap_summary"] = " · ".join(cap_bits)
+
+        he_feats: List[str] = []
+        bss_color_m = re.search(r"BSS\s+color:\s*(\d+)", text, re.IGNORECASE)
+        if bss_color_m:
+            he_feats.append(f"BSS color {bss_color_m.group(1)}")
+        if re.search(r"\bTWT\b", text, re.IGNORECASE):
+            he_feats.append("TWT")
+        if re.search(r"Spatial\s+Reuse", text, re.IGNORECASE):
+            he_feats.append("Spatial reuse")
+        if he_feats:
+            d["he_eht_features"] = ", ".join(he_feats)
 
         # ── BSS Load ─────────────────────────────────────────────────────
         sc_m = re.search(r"station count:\s*(\d+)", text)
@@ -1421,6 +1571,32 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         if cc_m:
             d["country"] = cc_m.group(1)
 
+        # ── Beacon / TIM / RSN capabilities / Vendor IEs ────────────────
+        bi_m = re.search(r"beacon\s+interval:\s*(\d+)\s*TU", text, re.IGNORECASE)
+        if bi_m:
+            d["beacon_interval_tu"] = int(bi_m.group(1))
+
+        dtim_m = re.search(r"DTIM\s+period:\s*(\d+)", text, re.IGNORECASE)
+        if dtim_m:
+            d["dtim_period"] = int(dtim_m.group(1))
+
+        rsn_caps_m = re.search(r"(?im)^\s*Capabilities:\s*(.+?)\s*$", text)
+        if rsn_caps_m:
+            decoded_caps = _decode_rsn_capabilities(rsn_caps_m.group(1))
+            if decoded_caps:
+                d["rsn_capabilities"] = decoded_caps
+
+        vendor_ouis = sorted(
+            {
+                x.upper()
+                for x in re.findall(
+                    r"Vendor\s+specific:\s*OUI\s*([0-9a-f:]{8})", text, re.IGNORECASE
+                )
+            }
+        )
+        if vendor_ouis:
+            d["vendor_ie_ouis"] = ", ".join(vendor_ouis)
+
         # ── Bonded-block center frequency ─────────────────────────────────
         # VHT (5 GHz 80/160) and HE/EHT (6 GHz) report "center freq 1: XXXX"
         cf1_m = re.search(r"\*\s*center freq(?:\s+segment)?\s*1\s*:\s*(\d+)", text)
@@ -1439,6 +1615,198 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
     return result
 
 
+def _parse_iw_station_dump(output: str, target_bssid: str = "") -> Dict[str, object]:
+    """Parse `iw dev <iface> station dump` for a station block (usually current AP)."""
+
+    target = (target_bssid or "").lower()
+    blocks = re.split(r"(?m)^Station\s+", output)
+    for block in blocks[1:]:
+        lines = block.splitlines()
+        if not lines:
+            continue
+        m = re.match(r"([0-9a-f:]{17})", lines[0].strip(), re.IGNORECASE)
+        if not m:
+            continue
+        bssid = m.group(1).lower()
+        if target and bssid != target:
+            continue
+
+        text = "\n".join(lines)
+        d: Dict[str, object] = {"conn_bssid": bssid}
+
+        def _int_value(pattern: str) -> Optional[int]:
+            mm = re.search(pattern, text, re.IGNORECASE)
+            return int(mm.group(1)) if mm else None
+
+        d["conn_inactive_ms"] = _int_value(r"inactive\s+time:\s*(\d+)\s*ms")
+        d["conn_tx_retries"] = _int_value(r"tx\s+retries:\s*(\d+)")
+        d["conn_tx_failed"] = _int_value(r"tx\s+failed:\s*(\d+)")
+        d["conn_connected_time_s"] = _int_value(r"connected\s+time:\s*(\d+)\s*seconds")
+        d["conn_signal_avg_dbm"] = _int_value(r"signal\s+avg:\s*(-?\d+)\s*dBm")
+        d["conn_tx_packets"] = _int_value(r"tx\s+packets:\s*(\d+)")
+        d["conn_tx_bytes"] = _int_value(r"tx\s+bytes:\s*(\d+)")
+        d["conn_rx_packets"] = _int_value(r"rx\s+packets:\s*(\d+)")
+        d["conn_rx_bytes"] = _int_value(r"rx\s+bytes:\s*(\d+)")
+        d["conn_rx_drop_misc"] = _int_value(r"rx\s+drop\s+misc:\s*(\d+)")
+
+        exp_m = re.search(r"expected\s+throughput:\s*([^\n]+)", text, re.IGNORECASE)
+        if exp_m:
+            d["conn_expected_tp"] = exp_m.group(1).strip()
+
+        return d
+
+    return {}
+
+
+def _parse_bitrate_phy(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    parts: List[str] = []
+    mode_m = re.search(r"\b(EHT|HE|VHT|HT)-MCS\b", text)
+    if mode_m:
+        parts.append(mode_m.group(1))
+    mcs_m = re.search(r"\b(?:EHT|HE|VHT|HT)-MCS\s*(\d+)\b", text)
+    if mcs_m:
+        parts.append(f"MCS {mcs_m.group(1)}")
+    nss_m = re.search(r"\b(?:EHT|HE|VHT|HT)-NSS\s*(\d+)\b", text)
+    if nss_m:
+        parts.append(f"NSS {nss_m.group(1)}")
+    gi_m = re.search(r"\b(?:EHT|HE|VHT|HT)-GI\s*([\d.]+)\b", text)
+    if gi_m:
+        parts.append(f"GI {gi_m.group(1)}")
+    dcm_m = re.search(r"\b(?:EHT|HE)-DCM\s*(\d+)\b", text)
+    if dcm_m:
+        parts.append(f"DCM {dcm_m.group(1)}")
+    ru_m = re.search(r"\bRU\s*([0-9A-Za-z/]+)\b", text)
+    if ru_m:
+        parts.append(f"RU {ru_m.group(1)}")
+    bw_m = re.search(r"\b(20|40|80|160|320)\s*MHz\b", text)
+    if bw_m:
+        parts.append(f"{bw_m.group(1)} MHz")
+    return " · ".join(parts)
+
+
+def _parse_iw_survey_dump(output: str, target_freq_mhz: Optional[int]) -> Dict[str, object]:
+    blocks = re.split(r"(?m)^Survey\s+data\s+from", output)
+    chosen: Optional[str] = None
+    for block in blocks[1:]:
+        b = block.strip()
+        if not b:
+            continue
+        freq_m = re.search(r"frequency:\s*(\d+)\s*MHz", b, re.IGNORECASE)
+        if not freq_m:
+            continue
+        freq = int(freq_m.group(1))
+        if "[in use]" in b:
+            chosen = b
+            break
+        if target_freq_mhz and freq == target_freq_mhz:
+            chosen = b
+            break
+    if not chosen:
+        return {}
+
+    def _int_value(pattern: str) -> Optional[int]:
+        mm = re.search(pattern, chosen, re.IGNORECASE)
+        return int(mm.group(1)) if mm else None
+
+    active_ms = _int_value(r"channel\s+active\s+time:\s*(\d+)\s*ms")
+    busy_ms = _int_value(r"channel\s+busy\s+time:\s*(\d+)\s*ms")
+    noise_dbm = _int_value(r"noise:\s*(-?\d+)\s*dBm")
+
+    d: Dict[str, object] = {}
+    if active_ms and busy_ms is not None and active_ms > 0:
+        d["conn_survey_busy_pct"] = (busy_ms / active_ms) * 100.0
+    if noise_dbm is not None:
+        d["conn_survey_noise_dbm"] = noise_dbm
+    return d
+
+
+def _get_connected_link_metrics(iface: str) -> Dict[str, object]:
+    """Collect connected-link telemetry via `iw link` and `iw station dump`."""
+
+    if not iface:
+        return {}
+
+    try:
+        link_res = subprocess.run(
+            ["iw", "dev", iface, "link"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except Exception:
+        return {}
+
+    if link_res.returncode != 0:
+        return {}
+
+    link_text = link_res.stdout or ""
+    if "Not connected." in link_text:
+        return {}
+
+    d: Dict[str, object] = {"conn_iface": iface}
+
+    bssid_m = re.search(r"Connected\s+to\s+([0-9a-f:]{17})", link_text, re.IGNORECASE)
+    if bssid_m:
+        d["conn_bssid"] = bssid_m.group(1).lower()
+
+    ssid_m = re.search(r"(?m)^\s*SSID:\s*(.+)\s*$", link_text)
+    if ssid_m:
+        d["conn_link_ssid"] = ssid_m.group(1).strip()
+
+    freq_m = re.search(r"(?m)^\s*freq:\s*(\d+)\s*$", link_text)
+    if freq_m:
+        d["conn_link_freq_mhz"] = int(freq_m.group(1))
+
+    sig_m = re.search(r"(?m)^\s*signal:\s*([\-\d.]+)\s*dBm\s*$", link_text)
+    if sig_m:
+        d["conn_link_signal_dbm"] = float(sig_m.group(1))
+
+    rx_m = re.search(r"(?m)^\s*rx\s+bitrate:\s*(.+)\s*$", link_text)
+    if rx_m:
+        d["conn_rx_bitrate"] = rx_m.group(1).strip()
+        d["conn_rx_phy"] = _parse_bitrate_phy(d["conn_rx_bitrate"])
+
+    tx_m = re.search(r"(?m)^\s*tx\s+bitrate:\s*(.+)\s*$", link_text)
+    if tx_m:
+        d["conn_tx_bitrate"] = tx_m.group(1).strip()
+        d["conn_tx_phy"] = _parse_bitrate_phy(d["conn_tx_bitrate"])
+
+    try:
+        sta_res = subprocess.run(
+            ["iw", "dev", iface, "station", "dump"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if sta_res.returncode == 0:
+            sta = _parse_iw_station_dump(sta_res.stdout, str(d.get("conn_bssid", "")))
+            if sta:
+                d.update(sta)
+    except Exception:
+        pass
+
+    try:
+        survey_res = subprocess.run(
+            ["iw", "dev", iface, "survey", "dump"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+        if survey_res.returncode == 0:
+            survey = _parse_iw_survey_dump(
+                survey_res.stdout, d.get("conn_link_freq_mhz")
+            )
+            if survey:
+                d.update(survey)
+    except Exception:
+        pass
+
+    return d
+
+
 def enrich_with_iw(aps: List[AccessPoint]) -> None:
     """Run 'iw dev scan dump' and merge extra fields into each AccessPoint."""
     iface = _detect_wifi_iface()
@@ -1454,10 +1822,13 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
         if res.returncode != 0:
             return
         iw_data = parse_iw_scan(res.stdout)
+        conn_data = _get_connected_link_metrics(iface)
+        conn_bssid = str(conn_data.get("conn_bssid", "")).lower()
         for ap in aps:
             d = iw_data.get(ap.bssid.lower())
             if not d:
-                continue
+                d = {}
+
             for attr in (
                 "dbm_exact",
                 "wifi_gen",
@@ -1472,6 +1843,12 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 "ft",
                 "country",
                 "iw_center_freq",
+                "beacon_interval_tu",
+                "dtim_period",
+                "rsn_capabilities",
+                "vendor_ie_ouis",
+                "phy_cap_summary",
+                "he_eht_features",
             ):
                 if attr in d:
                     setattr(ap, attr, d[attr])
@@ -1490,6 +1867,33 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 if use_wps:
                     ap.manufacturer = wps_vendor
                     ap.manufacturer_source = "WPS (iw scan)"
+
+            if conn_bssid and ap.bssid.lower() == conn_bssid:
+                for attr in (
+                    "conn_iface",
+                    "conn_link_ssid",
+                    "conn_link_freq_mhz",
+                    "conn_link_signal_dbm",
+                    "conn_rx_bitrate",
+                    "conn_tx_bitrate",
+                    "conn_expected_tp",
+                    "conn_signal_avg_dbm",
+                    "conn_tx_retries",
+                    "conn_tx_failed",
+                    "conn_inactive_ms",
+                    "conn_connected_time_s",
+                    "conn_tx_packets",
+                    "conn_tx_bytes",
+                    "conn_rx_packets",
+                    "conn_rx_bytes",
+                    "conn_rx_drop_misc",
+                    "conn_rx_phy",
+                    "conn_tx_phy",
+                    "conn_survey_busy_pct",
+                    "conn_survey_noise_dbm",
+                ):
+                    if attr in conn_data:
+                        setattr(ap, attr, conn_data[attr])
     except Exception:
         pass
 
@@ -2522,6 +2926,21 @@ class SignalHistoryWidget(QWidget):
         super().__init__()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setChildrenCollapsible(False)
+        layout.addWidget(self._splitter)
+
+        self._ssid_list = QListWidget()
+        self._ssid_list.setMinimumWidth(300)
+        self._ssid_list.setMaximumWidth(420)
+        self._ssid_list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        self._ssid_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._ssid_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._splitter.addWidget(self._ssid_list)
 
         self._plot = PlotWidget(axisItems={"left": DbmAxisItem(orientation="left")})
         self._plot.setBackground("#0d1117")
@@ -2532,17 +2951,20 @@ class SignalHistoryWidget(QWidget):
         self._plot.setMenuEnabled(True)
         self._plot.getViewBox().setMouseEnabled(x=True, y=True)
         self._plot.setYRange(CHAN_DBM_FLOOR, CHAN_DBM_CEIL, padding=0.02)
+        self._plot.setXRange(-HISTORY_SECONDS, 0, padding=0.0)
         y_ticks = [(v, str(v)) for v in range(CHAN_DBM_FLOOR, CHAN_DBM_CEIL + 1, 10)]
         self._plot.getAxis("left").setTicks([y_ticks])
-        layout.addWidget(self._plot)
-
-        # legend
-        self._legend = self._plot.addLegend(offset=(10, 10))
+        self._splitter.addWidget(self._plot)
+        self._splitter.setStretchFactor(0, 0)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([320, 1200])
+        self._plot.scene().sigMouseMoved.connect(self._on_mouse_hover)
 
         self._history: Dict[str, deque] = defaultdict(
             lambda: deque(maxlen=HISTORY_SECONDS)
         )
         self._curves: Dict[str, pg.PlotDataItem] = {}
+        self._curve_data: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
         self._ssid_colors: Dict[str, QColor] = {}
         self._ssid_map: Dict[str, str] = {}  # bssid → ssid
         self._t0 = time.time()
@@ -2555,6 +2977,10 @@ class SignalHistoryWidget(QWidget):
         for _ax in ("left", "bottom"):
             self._plot.getAxis(_ax).setTextPen(fg)
             self._plot.getAxis(_ax).setPen(fg)
+        self._ssid_list.setStyleSheet(
+            f"QListWidget {{ border: none; background: {bg}; color: {fg}; font-size: 10pt; }}"
+            f"QListWidget::item {{ padding: 2px 4px; }}"
+        )
 
     def set_ssid_colors(self, colors: Dict[str, QColor]):
         self._ssid_colors = colors
@@ -2579,6 +3005,21 @@ class SignalHistoryWidget(QWidget):
         for bssid in list(self._curves.keys()):
             if bssid not in visible_bssids:
                 self._plot.removeItem(self._curves.pop(bssid))
+                self._curve_data.pop(bssid, None)
+
+        # Left legend/list (outside plot area)
+        self._ssid_list.clear()
+        sorted_bssids = sorted(
+            visible_bssids,
+            key=lambda b: (self._ssid_map.get(b, b).lower(), b),
+        )
+        for bssid in sorted_bssids:
+            ssid = self._ssid_map.get(bssid, bssid)
+            item = QListWidgetItem(f"{ssid} ({bssid[-5:]})")
+            item.setToolTip(bssid)
+            color = self._ssid_colors.get(ssid, QColor("#888888"))
+            item.setForeground(QBrush(color))
+            self._ssid_list.addItem(item)
 
         for bssid in visible_bssids:
             pts = list(self._history[bssid])
@@ -2594,10 +3035,53 @@ class SignalHistoryWidget(QWidget):
 
             if bssid not in self._curves:
                 pen = mkPen(color=color, width=2)
-                curve = self._plot.plot(ts, ss, pen=pen, name=f"{ssid} ({bssid[-5:]})")
+                curve = self._plot.plot(ts, ss, pen=pen)
                 self._curves[bssid] = curve
             else:
                 self._curves[bssid].setData(ts, ss)
+
+            self._curve_data[bssid] = (ts, ss)
+
+        self._plot.setXRange(-HISTORY_SECONDS, 0, padding=0.0)
+
+    def _on_mouse_hover(self, pos) -> None:
+        if not self._plot.sceneBoundingRect().contains(pos):
+            QToolTip.hideText()
+            return
+
+        if not self._curve_data:
+            QToolTip.hideText()
+            return
+
+        view_pos = self._plot.plotItem.vb.mapSceneToView(pos)
+        x = float(view_pos.x())
+        y = float(view_pos.y())
+
+        best_bssid: Optional[str] = None
+        best_dist = float("inf")
+        best_y = None
+
+        for bssid, (xs, ys) in self._curve_data.items():
+            if len(xs) == 0:
+                continue
+            idx = int(np.argmin(np.abs(xs - x)))
+            yv = float(ys[idx])
+            dist = abs(yv - y)
+            if dist < best_dist:
+                best_dist = dist
+                best_bssid = bssid
+                best_y = yv
+
+        if best_bssid is None or best_dist > 3.0:
+            QToolTip.hideText()
+            return
+
+        ssid = self._ssid_map.get(best_bssid, best_bssid)
+        QToolTip.showText(
+            QCursor.pos(),
+            f"{ssid}\n{best_bssid}\nSignal: {int(round(best_y))} dBm",
+            self._plot,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -3718,6 +4202,7 @@ class MainWindow(QMainWindow):
         # Cache for iw-enriched fields — persisted across up to 5 missed cycles
         self._iw_cache: Dict[str, dict] = {}  # bssid.lower() → field snapshot
         self._iw_miss: Dict[str, int] = {}  # bssid.lower() → consecutive-miss count
+        self._conn_counter_prev: Dict[str, Dict[str, int]] = {}
         self._scanner = WiFiScanner(interval_sec=2)
         self._scanner.data_ready.connect(self._on_data)
         self._scanner.scan_error.connect(self._on_error)
@@ -3958,11 +4443,17 @@ class MainWindow(QMainWindow):
             "frequency",
             "chan_width",
             "country",
+            "beacon_interval",
+            "dtim_period",
+            "phy_caps",
+            "he_features",
             "signal",
             "max_rate",
             "security",
             "wpa_flags",
             "rsn_flags",
+            "rsn_caps",
+            "vendor_ies",
             "akm_raw",
             "wps_manufacturer",
             "pmf",
@@ -3980,11 +4471,17 @@ class MainWindow(QMainWindow):
             "Center Frequency",
             "Channel Width (MHz)",
             "Country Code (802.11d)",
+            "Beacon Interval",
+            "DTIM Period",
+            "PHY Capability Summary",
+            "HE/EHT Features",
             "Signal (RSSI)",
             "Max PHY Rate",
             "Security Profile",
             "WPA IE",
             "RSN IE",
+            "RSN Capabilities",
+            "Vendor IEs (OUIs)",
             "AKM Suites",
             "WPS Manufacturer (IE)",
             "PMF / 802.11w",
@@ -4003,6 +4500,10 @@ class MainWindow(QMainWindow):
             "frequency",
             "chan_width",
             "country",
+            "beacon_interval",
+            "dtim_period",
+            "phy_caps",
+            "he_features",
             "signal",
         ]
         _DET_RIGHT_KEYS = [
@@ -4010,6 +4511,8 @@ class MainWindow(QMainWindow):
             "security",
             "wpa_flags",
             "rsn_flags",
+            "rsn_caps",
+            "vendor_ies",
             "akm_raw",
             "wps_manufacturer",
             "pmf",
@@ -4089,6 +4592,181 @@ class MainWindow(QMainWindow):
         )
         _details_scroll.setWidget(self._details_widget)
         self._details_tab_index = self._tabs.addTab(_details_scroll, "ℹ️  Details")
+
+        # Connection tab (always current connected AP + connected-session telemetry)
+        self._connection_widget = QWidget()
+        self._connection_widget.setContentsMargins(0, 0, 0, 0)
+        _conn_outer = QVBoxLayout(self._connection_widget)
+        _conn_outer.setContentsMargins(10, 10, 10, 10)
+        _conn_outer.setSpacing(10)
+
+        self._conn_ssid = QLabel("Wifi not connected")
+        self._conn_ssid.setTextFormat(Qt.TextFormat.RichText)
+        self._conn_ssid.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        self._conn_ssid.setContentsMargins(14, 12, 14, 4)
+        _conn_outer.addWidget(self._conn_ssid)
+
+        _conn_sep = QFrame()
+        _conn_sep.setFrameShape(QFrame.Shape.HLine)
+        _conn_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        _conn_outer.addWidget(_conn_sep)
+
+        self._conn_cards_wrap = QWidget()
+        _conn_cards = QHBoxLayout(self._conn_cards_wrap)
+        _conn_cards.setContentsMargins(0, 0, 0, 0)
+        _conn_cards.setSpacing(12)
+
+        self._conn_card_left = QFrame()
+        self._conn_card_left.setObjectName("detailsCard")
+        self._conn_card_right = QFrame()
+        self._conn_card_right.setObjectName("detailsCard")
+
+        _conn_left_form = QFormLayout(self._conn_card_left)
+        _conn_left_form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        _conn_left_form.setHorizontalSpacing(16)
+        _conn_left_form.setVerticalSpacing(9)
+        _conn_left_form.setContentsMargins(14, 12, 14, 12)
+
+        _conn_right_form = QFormLayout(self._conn_card_right)
+        _conn_right_form.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        _conn_right_form.setHorizontalSpacing(16)
+        _conn_right_form.setVerticalSpacing(9)
+        _conn_right_form.setContentsMargins(14, 12, 14, 12)
+
+        _CONN_ROWS = [
+            "status",
+            "ssid",
+            "bssid",
+            "manufacturer",
+            "band",
+            "channel",
+            "security",
+            "akm",
+            "pmf",
+            "beacon_interval",
+            "dtim_period",
+            "rsn_caps",
+            "vendor_ies",
+            "signal",
+            "iface",
+            "rx_phy",
+            "tx_phy",
+            "link_freq",
+            "rx_bitrate",
+            "tx_bitrate",
+            "expected_tp",
+            "rx_packets",
+            "tx_packets",
+            "rx_bytes",
+            "tx_bytes",
+            "rx_drop_misc",
+            "signal_avg",
+            "tx_retries",
+            "tx_retry_rate",
+            "tx_failed",
+            "tx_fail_rate",
+            "channel_busy",
+            "noise_floor",
+            "inactive",
+            "connected_time",
+        ]
+        _CONN_LABELS = [
+            "Connection State",
+            "SSID",
+            "BSSID",
+            "Manufacturer",
+            "Band",
+            "Channel",
+            "Security Profile",
+            "AKM",
+            "PMF",
+            "Beacon Interval",
+            "DTIM Period",
+            "RSN Capabilities",
+            "Vendor IEs (OUIs)",
+            "Signal (Connected AP)",
+            "Interface",
+            "RX PHY",
+            "TX PHY",
+            "Link Frequency",
+            "RX Bitrate",
+            "TX Bitrate",
+            "Expected Throughput",
+            "RX Packets",
+            "TX Packets",
+            "RX Bytes",
+            "TX Bytes",
+            "RX Drop/Misc",
+            "Signal Avg",
+            "TX Retries",
+            "TX Retry Rate",
+            "TX Failed",
+            "TX Fail Rate",
+            "Channel Busy",
+            "Noise Floor",
+            "Inactive Time",
+            "Connected Time",
+        ]
+        _CONN_LEFT_KEYS = [
+            "status",
+            "ssid",
+            "bssid",
+            "manufacturer",
+            "band",
+            "channel",
+            "security",
+            "akm",
+            "pmf",
+            "beacon_interval",
+            "dtim_period",
+            "rsn_caps",
+            "vendor_ies",
+            "signal",
+        ]
+
+        self._conn_vals: dict[str, QLabel] = {}
+        for key, lbl_text in zip(_CONN_ROWS, _CONN_LABELS):
+            lbl = QLabel(f"<b>{lbl_text}</b>")
+            lbl.setTextFormat(Qt.TextFormat.RichText)
+            lbl.setProperty("detailRole", "name")
+            val = QLabel("—")
+            val.setTextFormat(Qt.TextFormat.RichText)
+            val.setWordWrap(True)
+            val.setProperty("detailRole", "value")
+            val.setMargin(4)
+            val.setMinimumHeight(24)
+            val.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.TextSelectableByKeyboard
+            )
+            self._conn_vals[key] = val
+            if key in _CONN_LEFT_KEYS:
+                _conn_left_form.addRow(lbl, val)
+            else:
+                _conn_right_form.addRow(lbl, val)
+
+        _conn_cards.addWidget(self._conn_card_left, 1)
+        _conn_cards.addWidget(self._conn_card_right, 1)
+        _conn_outer.addWidget(self._conn_cards_wrap)
+        _conn_outer.addStretch()
+
+        _connection_scroll = QScrollArea()
+        _connection_scroll.setWidgetResizable(True)
+        _connection_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        _connection_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        _connection_scroll.setWidget(self._connection_widget)
+        self._connection_tab_index = self._tabs.addTab(
+            _connection_scroll, "🔗  Connection"
+        )
 
         splitter.setSizes([380, 350])
 
@@ -4204,6 +4882,35 @@ class MainWindow(QMainWindow):
         "ft",
         "country",
         "iw_center_freq",
+        "beacon_interval_tu",
+        "dtim_period",
+        "rsn_capabilities",
+        "vendor_ie_ouis",
+        "phy_cap_summary",
+        "he_eht_features",
+        "conn_iface",
+        "conn_link_ssid",
+        "conn_link_freq_mhz",
+        "conn_link_signal_dbm",
+        "conn_rx_bitrate",
+        "conn_tx_bitrate",
+        "conn_expected_tp",
+        "conn_signal_avg_dbm",
+        "conn_tx_retries",
+        "conn_tx_failed",
+        "conn_inactive_ms",
+        "conn_connected_time_s",
+        "conn_tx_packets",
+        "conn_tx_bytes",
+        "conn_rx_packets",
+        "conn_rx_bytes",
+        "conn_rx_drop_misc",
+        "conn_rx_phy",
+        "conn_tx_phy",
+        "conn_tx_retry_rate_pct",
+        "conn_tx_fail_rate_pct",
+        "conn_survey_busy_pct",
+        "conn_survey_noise_dbm",
     )
 
     def _auto_size_table_columns(self):
@@ -4316,6 +5023,41 @@ class MainWindow(QMainWindow):
                 for f, v in self._iw_cache[key].items():
                     setattr(ap, f, v)
                 self._iw_miss[key] = self._iw_miss.get(key, 0) + 1
+
+        # ── connected counter deltas (retry/fail rates) ───────────────────
+        for ap in aps:
+            if not ap.in_use:
+                continue
+            key = ap.bssid.lower()
+            prev = self._conn_counter_prev.get(key)
+            if (
+                prev
+                and ap.conn_tx_packets is not None
+                and ap.conn_tx_retries is not None
+                and ap.conn_tx_failed is not None
+            ):
+                d_pkts = ap.conn_tx_packets - prev.get("tx_packets", ap.conn_tx_packets)
+                d_retry = ap.conn_tx_retries - prev.get("tx_retries", ap.conn_tx_retries)
+                d_fail = ap.conn_tx_failed - prev.get("tx_failed", ap.conn_tx_failed)
+                if d_pkts > 0 and d_retry >= 0 and d_fail >= 0:
+                    ap.conn_tx_retry_rate_pct = (d_retry / d_pkts) * 100.0
+                    ap.conn_tx_fail_rate_pct = (d_fail / d_pkts) * 100.0
+
+            if (
+                ap.conn_tx_packets is not None
+                and ap.conn_tx_retries is not None
+                and ap.conn_tx_failed is not None
+            ):
+                self._conn_counter_prev[key] = {
+                    "tx_packets": ap.conn_tx_packets,
+                    "tx_retries": ap.conn_tx_retries,
+                    "tx_failed": ap.conn_tx_failed,
+                }
+
+            if key in self._iw_cache:
+                self._iw_cache[key] = {
+                    f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS
+                }
         # ────────────────────────────────────────────────────────────────────
         self._aps = aps
         self._model.update(aps)
@@ -4334,6 +5076,7 @@ class MainWindow(QMainWindow):
         ts = time.strftime("%H:%M:%S")
         self._lbl_updated.setText(f"  Last scan: {ts}  ")
         self.statusBar().showMessage(f"Found {total} access points  |  Showing {shown}")
+        self._show_connection()
 
     def _on_theme_change(self, idx: int):
         modes = ["dark", "light", "auto"]
@@ -4408,6 +5151,8 @@ class MainWindow(QMainWindow):
         )
 
         self._details_widget.setStyleSheet(details_style)
+        if hasattr(self, "_connection_widget"):
+            self._connection_widget.setStyleSheet(details_style)
 
     def _on_error(self, msg: str):
         self.statusBar().showMessage(f"⚠ Scanner error: {msg}")
@@ -4856,7 +5601,7 @@ class MainWindow(QMainWindow):
 
         v["bssid"].setText(ap.bssid)
         manuf_raw = ap.manufacturer or ""
-        manuf_text = manuf_raw
+        manuf_text = format_manufacturer_display(manuf_raw)
         manuf_source = (ap.manufacturer_source or "Unknown").strip() or "Unknown"
         if manuf_text:
             icon_path = _resolve_vendor_icon_path(manuf_raw)
@@ -4880,6 +5625,16 @@ class MainWindow(QMainWindow):
         v["frequency"].setText(f"{ap.freq_mhz} MHz")
         v["chan_width"].setText(f"{ap.bandwidth_mhz} MHz")
         v["country"].setText(ap.country or dim("Unknown"))
+        v["beacon_interval"].setText(
+            f"{ap.beacon_interval_tu} TU"
+            if ap.beacon_interval_tu is not None
+            else dim("Not advertised")
+        )
+        v["dtim_period"].setText(
+            str(ap.dtim_period) if ap.dtim_period is not None else dim("Not advertised")
+        )
+        v["phy_caps"].setText(ap.phy_cap_summary or dim("Not advertised"))
+        v["he_features"].setText(ap.he_eht_features or dim("Not advertised"))
         v["signal"].setText(
             f'<span style="color:{sig_col};font-size:15px;font-weight:700">'
             f"{ap.signal}%&nbsp;</span>"
@@ -4896,6 +5651,8 @@ class MainWindow(QMainWindow):
         v["security"].setToolTip("")
         v["wpa_flags"].setText(format_ie_flags(ap.wpa_flags, "WPA IE not present"))
         v["rsn_flags"].setText(format_ie_flags(ap.rsn_flags, "RSN IE not present"))
+        v["rsn_caps"].setText(ap.rsn_capabilities or dim("Not advertised"))
+        v["vendor_ies"].setText(ap.vendor_ie_ouis or dim("Not advertised"))
         v["wpa_flags"].setToolTip(raw_ie_or_dim(ap.wpa_flags, "WPA IE not present"))
         v["rsn_flags"].setToolTip(raw_ie_or_dim(ap.rsn_flags, "RSN IE not present"))
         akm_compact = (ap.akm or "").strip()
@@ -4917,6 +5674,167 @@ class MainWindow(QMainWindow):
             str(ap.station_count) if ap.station_count is not None else dim("Unknown")
         )
         v["roaming"].setText(kvr_html)
+
+    def _show_connection(self):
+        def dim(text):
+            return f"<span style='color:#777'>{text}</span>"
+
+        connected_ap = next(
+            (
+                x
+                for x in self._aps
+                if x.in_use and (x.conn_iface or x.conn_link_freq_mhz is not None)
+            ),
+            None,
+        )
+        if connected_ap is None:
+            connected_ap = next((x for x in self._aps if x.in_use), None)
+        if connected_ap is None:
+            connected_ap = next(
+                (x for x in self._aps if x.conn_iface or x.conn_link_freq_mhz is not None),
+                None,
+            )
+        v = self._conn_vals
+        if connected_ap is None:
+            self._conn_ssid.setText(
+                "<span style='font-size:20px;font-weight:700;color:#777'>Wifi not connected</span>"
+            )
+            v["status"].setText(dim("Wifi not connected"))
+            for key in (
+                "ssid",
+                "bssid",
+                "manufacturer",
+                "band",
+                "channel",
+                "security",
+                "akm",
+                "pmf",
+                "beacon_interval",
+                "dtim_period",
+                "rsn_caps",
+                "vendor_ies",
+                "signal",
+                "iface",
+                "rx_phy",
+                "tx_phy",
+                "link_freq",
+                "rx_bitrate",
+                "tx_bitrate",
+                "expected_tp",
+                "rx_packets",
+                "tx_packets",
+                "rx_bytes",
+                "tx_bytes",
+                "rx_drop_misc",
+                "signal_avg",
+                "tx_retries",
+                "tx_retry_rate",
+                "tx_failed",
+                "tx_fail_rate",
+                "channel_busy",
+                "noise_floor",
+                "inactive",
+                "connected_time",
+            ):
+                v[key].setText(dim("—"))
+            return
+
+        ap = connected_ap
+
+        color = self._model.ssid_colors().get(ap.ssid, QColor("#888888")).name()
+        connected_badge = (
+            " &nbsp;<span style='font-size:13px;font-weight:600;color:#2e7d32;'>"
+            "CONNECTED AP</span>"
+        )
+        self._conn_ssid.setText(
+            f'<span style="font-size:20px;font-weight:700;color:{color}">{ap.display_ssid}</span>{connected_badge}'
+        )
+
+        v["status"].setText("Connected")
+        v["ssid"].setText(ap.display_ssid)
+        v["bssid"].setText(ap.bssid)
+        manuf_text = format_manufacturer_display(ap.manufacturer)
+        v["manufacturer"].setText(manuf_text or dim("Unknown"))
+        v["band"].setText(ap.band)
+        v["channel"].setText(str(ap.channel) if ap.channel else dim("Unknown"))
+        v["security"].setText(ap.security_short or dim("Unknown"))
+        v["akm"].setText(ap.akm or ap.akm_raw or dim("Unknown"))
+        v["pmf"].setText(ap.pmf or dim("Unknown"))
+        v["beacon_interval"].setText(
+            f"{ap.beacon_interval_tu} TU"
+            if ap.beacon_interval_tu is not None
+            else dim("Not advertised")
+        )
+        v["dtim_period"].setText(
+            str(ap.dtim_period) if ap.dtim_period is not None else dim("Not advertised")
+        )
+        v["rsn_caps"].setText(ap.rsn_capabilities or dim("Not advertised"))
+        v["vendor_ies"].setText(ap.vendor_ie_ouis or dim("Not advertised"))
+        v["signal"].setText(f"{ap.dbm} dBm  ({ap.signal}%)")
+
+        v["iface"].setText(ap.conn_iface or dim("Unknown"))
+        v["rx_phy"].setText(ap.conn_rx_phy or dim("Not reported"))
+        v["tx_phy"].setText(ap.conn_tx_phy or dim("Not reported"))
+        if ap.conn_link_freq_mhz is not None:
+            v["link_freq"].setText(f"{ap.conn_link_freq_mhz} MHz")
+        else:
+            v["link_freq"].setText(dim("Not reported"))
+        v["rx_bitrate"].setText(ap.conn_rx_bitrate or dim("Not reported"))
+        v["tx_bitrate"].setText(ap.conn_tx_bitrate or dim("Not reported"))
+        v["expected_tp"].setText(ap.conn_expected_tp or dim("Not reported"))
+        v["rx_packets"].setText(
+            str(ap.conn_rx_packets) if ap.conn_rx_packets is not None else dim("Not reported")
+        )
+        v["tx_packets"].setText(
+            str(ap.conn_tx_packets) if ap.conn_tx_packets is not None else dim("Not reported")
+        )
+        v["rx_bytes"].setText(
+            str(ap.conn_rx_bytes) if ap.conn_rx_bytes is not None else dim("Not reported")
+        )
+        v["tx_bytes"].setText(
+            str(ap.conn_tx_bytes) if ap.conn_tx_bytes is not None else dim("Not reported")
+        )
+        v["rx_drop_misc"].setText(
+            str(ap.conn_rx_drop_misc)
+            if ap.conn_rx_drop_misc is not None
+            else dim("Not reported")
+        )
+        if ap.conn_signal_avg_dbm is not None:
+            v["signal_avg"].setText(f"{ap.conn_signal_avg_dbm} dBm")
+        else:
+            v["signal_avg"].setText(dim("Not reported"))
+        if ap.conn_tx_retries is not None:
+            v["tx_retries"].setText(str(ap.conn_tx_retries))
+        else:
+            v["tx_retries"].setText(dim("Not reported"))
+        if ap.conn_tx_retry_rate_pct is not None:
+            v["tx_retry_rate"].setText(f"{ap.conn_tx_retry_rate_pct:.1f}%")
+        else:
+            v["tx_retry_rate"].setText(dim("Not reported"))
+        if ap.conn_tx_failed is not None:
+            v["tx_failed"].setText(str(ap.conn_tx_failed))
+        else:
+            v["tx_failed"].setText(dim("Not reported"))
+        if ap.conn_tx_fail_rate_pct is not None:
+            v["tx_fail_rate"].setText(f"{ap.conn_tx_fail_rate_pct:.1f}%")
+        else:
+            v["tx_fail_rate"].setText(dim("Not reported"))
+        if ap.conn_survey_busy_pct is not None:
+            v["channel_busy"].setText(f"{ap.conn_survey_busy_pct:.1f}%")
+        else:
+            v["channel_busy"].setText(dim("Not reported"))
+        if ap.conn_survey_noise_dbm is not None:
+            v["noise_floor"].setText(f"{ap.conn_survey_noise_dbm} dBm")
+        else:
+            v["noise_floor"].setText(dim("Not reported"))
+        if ap.conn_inactive_ms is not None:
+            v["inactive"].setText(f"{ap.conn_inactive_ms} ms")
+        else:
+            v["inactive"].setText(dim("Not reported"))
+        if ap.conn_connected_time_s is not None:
+            v["connected_time"].setText(f"{ap.conn_connected_time_s} s")
+        else:
+            v["connected_time"].setText(dim("Not reported"))
 
     def eventFilter(self, obj, event):
         if (

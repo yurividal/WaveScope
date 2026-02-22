@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.6.0 — 2026-02-22
+
+### Highlights
+- Added a new Connection tab focused on the currently connected BSSID.
+- Expanded wireless engineering telemetry in Details/Connection (beacon/RSN/capability and link metrics).
+- Improved Signal History with a dedicated resizable SSID pane and line hover tooltips.
+
 ## v1.5.2 — 2026-02-22
 
 ### Highlights
