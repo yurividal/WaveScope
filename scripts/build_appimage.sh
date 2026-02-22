@@ -4,11 +4,14 @@
 # Example: ./scripts/build_appimage.sh 1.5.0
 set -euo pipefail
 
-VERSION="${1:-$(grep -m1 'VERSION' main.py | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/main.py" | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
 APP_ID="wavescope"
 APP_NAME="WaveScope"
 ARCH="$(uname -m)"
-BUILD_DIR="$(pwd)/_appimage_build"
+BUILD_DIR="$REPO_ROOT/_appimage_build"
 APPDIR="$BUILD_DIR/${APP_NAME}.AppDir"
 APP_PREFIX="$APPDIR/usr/share/${APP_ID}"
 PY_RUNTIME="$APP_PREFIX/python-runtime"
@@ -37,9 +40,9 @@ mkdir -p \
     "$PY_RUNTIME/lib64"
 
 # ── 2. Copy application files ───────────────────────────────────────────────
-cp -a main.py requirements.txt assets "$APP_PREFIX/"
-[ -f LICENSE ] && cp LICENSE "$APP_PREFIX/" || true
-[ -f README.md ] && cp README.md "$APP_PREFIX/" || true
+cp -a "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$REPO_ROOT/assets" "$APP_PREFIX/"
+[ -f "$REPO_ROOT/LICENSE" ] && cp "$REPO_ROOT/LICENSE" "$APP_PREFIX/" || true
+[ -f "$REPO_ROOT/README.md" ] && cp "$REPO_ROOT/README.md" "$APP_PREFIX/" || true
 
 # ── 3. Create in-AppImage Python environment ────────────────────────────────
 # Use --copies so the venv does not rely on host /usr/bin/python symlinks
@@ -116,10 +119,10 @@ Keywords=wifi;wireless;network;analyzer;
 StartupWMClass=wavescope
 EOF
 
-cp assets/icon.svg "$APPDIR/${APP_ID}.svg"
+cp "$REPO_ROOT/assets/icon.svg" "$APPDIR/${APP_ID}.svg"
 
 # ── 6. Build AppImage ───────────────────────────────────────────────────────
-appimagetool "$APPDIR" "$OUTPUT_FILE"
+appimagetool "$APPDIR" "$REPO_ROOT/$OUTPUT_FILE"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

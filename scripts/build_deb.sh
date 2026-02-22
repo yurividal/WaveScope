@@ -4,10 +4,13 @@
 # Example: ./scripts/build_deb.sh 1.0.0
 set -euo pipefail
 
-VERSION="${1:-$(grep -m1 'VERSION' main.py | grep -oP '\"[0-9]+\.[0-9]+\.[0-9]+\"' | tr -d '"')}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/main.py" | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
 ARCH="all"
 PKGNAME="wavescope"
-BUILD_DIR="$(pwd)/_deb_build"
+BUILD_DIR="$REPO_ROOT/_deb_build"
 DEB_ROOT="$BUILD_DIR/${PKGNAME}_${VERSION}_${ARCH}"
 INSTALL_DIR="$DEB_ROOT/opt/wavescope"
 
@@ -25,9 +28,9 @@ mkdir -p \
     "$DEB_ROOT/DEBIAN"
 
 # ── 2. Copy application files ─────────────────────────────────────────────────
-cp main.py requirements.txt "$INSTALL_DIR/"
-cp assets/icon.svg "$INSTALL_DIR/assets/"
-[[ -f assets/screenshot.png ]] && cp assets/screenshot.png "$INSTALL_DIR/assets/"
+cp "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$INSTALL_DIR/"
+cp "$REPO_ROOT/assets/icon.svg" "$INSTALL_DIR/assets/"
+[[ -f "$REPO_ROOT/assets/screenshot.png" ]] && cp "$REPO_ROOT/assets/screenshot.png" "$INSTALL_DIR/assets/"
 
 # ── 3. DEBIAN/control ────────────────────────────────────────────────────────
 cat > "$DEB_ROOT/DEBIAN/control" <<EOF
@@ -95,7 +98,7 @@ StartupWMClass=wavescope
 EOF
 
 # ── 8. Icon ──────────────────────────────────────────────────────────────────
-cp assets/icon.svg "$DEB_ROOT/usr/share/icons/hicolor/scalable/apps/wavescope.svg"
+cp "$REPO_ROOT/assets/icon.svg" "$DEB_ROOT/usr/share/icons/hicolor/scalable/apps/wavescope.svg"
 
 # ── 9. Fix permissions ───────────────────────────────────────────────────────
 find "$DEB_ROOT" -type d -exec chmod 0755 {} \;
@@ -106,6 +109,7 @@ chmod 0755 "$DEB_ROOT/DEBIAN/postinst" "$DEB_ROOT/DEBIAN/prerm"
 dpkg-deb --build --root-owner-group "$DEB_ROOT"
 DEB_FILE="${PKGNAME}_${VERSION}_${ARCH}.deb"
 mv "${DEB_ROOT}.deb" "./$DEB_FILE"
+mv -f "./$DEB_FILE" "$REPO_ROOT/$DEB_FILE"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

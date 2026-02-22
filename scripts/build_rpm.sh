@@ -7,9 +7,12 @@
 #   Fedora/RHEL:  sudo dnf install rpm-build
 set -euo pipefail
 
-VERSION="${1:-$(grep -m1 'VERSION' main.py | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/main.py" | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
 PKGNAME="wavescope"
-RPM_BUILD_DIR="$(pwd)/_rpm_build"
+RPM_BUILD_DIR="$REPO_ROOT/_rpm_build"
 TARBALL_NAME="${PKGNAME}-${VERSION}"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -28,15 +31,15 @@ mkdir -p \
 # ── 2. Create source tarball ──────────────────────────────────────────────────
 STAGING="$RPM_BUILD_DIR/$TARBALL_NAME"
 mkdir -p "$STAGING/assets"
-cp main.py requirements.txt "$STAGING/"
-cp assets/icon.svg "$STAGING/assets/"
-[ -f assets/screenshot.png ] && cp assets/screenshot.png "$STAGING/assets/" || true
+cp "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$STAGING/"
+cp "$REPO_ROOT/assets/icon.svg" "$STAGING/assets/"
+[ -f "$REPO_ROOT/assets/screenshot.png" ] && cp "$REPO_ROOT/assets/screenshot.png" "$STAGING/assets/" || true
 tar -czf "$RPM_BUILD_DIR/SOURCES/${TARBALL_NAME}.tar.gz" \
     -C "$RPM_BUILD_DIR" "$TARBALL_NAME"
 
 # ── 3. Write spec file ────────────────────────────────────────────────────────
 HAS_SCREENSHOT=0
-[ -f assets/screenshot.png ] && HAS_SCREENSHOT=1
+[ -f "$REPO_ROOT/assets/screenshot.png" ] && HAS_SCREENSHOT=1
 
 cat > "$RPM_BUILD_DIR/SPECS/${PKGNAME}.spec" <<SPEC
 Name:           ${PKGNAME}
@@ -150,7 +153,7 @@ rpmbuild --define "_topdir $RPM_BUILD_DIR" \
 # ── 5. Copy output to project root ───────────────────────────────────────────
 RPM_FILE=$(find "$RPM_BUILD_DIR/RPMS" -name "*.rpm" | head -1)
 if [[ -n "$RPM_FILE" ]]; then
-    cp "$RPM_FILE" "$(pwd)/"
+    cp "$RPM_FILE" "$REPO_ROOT/"
     RPM_BASENAME="$(basename "$RPM_FILE")"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
