@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-nmcli-gui — Modern WiFi Analyzer for Linux
+wavescope — Modern WiFi Analyzer for Linux
 Requires: PyQt6, pyqtgraph, numpy
 Data source: nmcli (NetworkManager CLI)
 """
@@ -92,7 +92,7 @@ from pyqtgraph import PlotWidget, mkPen, mkBrush
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -192,6 +192,108 @@ def freq_to_band(freq_mhz: int) -> str:
     if 5925 <= freq_mhz <= 7125:
         return "6 GHz"
     return "?"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5 GHz bonded-channel group tables
+#
+# IEEE 802.11 defines fixed OFDM channel blocks for each bandwidth.
+# When an AP reports its *primary* 20 MHz channel at a wider BW, the actual
+# spectrum it occupies is the entire bonded block, not just ±BW/2 around the
+# primary channel center.
+#
+# Example: primary ch 116 @ 80 MHz → block is ch 116-128 → center at ch 122
+#          primary ch 100 @ 160 MHz → block is ch 100-128 → center at ch 114
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Each entry: ([primary channels in block], center_freq_MHz)
+_5GHZ_GROUPS_40: List[Tuple[List[int], int]] = [
+    ([36, 40], 5190),
+    ([44, 48], 5230),
+    ([52, 56], 5270),
+    ([60, 64], 5310),
+    ([100, 104], 5510),
+    ([108, 112], 5550),
+    ([116, 120], 5590),
+    ([124, 128], 5630),
+    ([132, 136], 5670),
+    ([140, 144], 5710),
+    ([149, 153], 5755),
+    ([157, 161], 5795),
+    ([165, 169], 5835),
+    ([173, 177], 5875),
+]
+
+_5GHZ_GROUPS_80: List[Tuple[List[int], int]] = [
+    ([36, 40, 44, 48], 5210),
+    ([52, 56, 60, 64], 5290),
+    ([100, 104, 108, 112], 5530),
+    ([116, 120, 124, 128], 5610),
+    ([132, 136, 140, 144], 5690),
+    ([149, 153, 157, 161], 5775),
+    ([165, 169, 173, 177], 5855),
+]
+
+_5GHZ_GROUPS_160: List[Tuple[List[int], int]] = [
+    ([36, 40, 44, 48, 52, 56, 60, 64], 5250),
+    ([100, 104, 108, 112, 116, 120, 124, 128], 5570),
+    ([149, 153, 157, 161, 165, 169, 173, 177], 5815),
+]
+
+# Fast lookup: (primary_chan, bw_mhz) → (center_freq_MHz, sorted_channels_list)
+_5GHZ_BONDED: Dict[Tuple[int, int], Tuple[int, List[int]]] = {}
+for _bw, _grps in [
+    (40, _5GHZ_GROUPS_40),
+    (80, _5GHZ_GROUPS_80),
+    (160, _5GHZ_GROUPS_160),
+]:
+    for _chans, _cf in _grps:
+        for _c in _chans:
+            _5GHZ_BONDED[(_c, _bw)] = (_cf, _chans)
+
+
+def get_5ghz_bonded_info(primary_chan: int, bw_mhz: int) -> Tuple[int, List[int]]:
+    """
+    Return (center_freq_MHz, [all_channels_in_block]) for a 5 GHz primary channel
+    at the given bandwidth.  Falls back to primary channel's own freq if the
+    combination is not in the standard block table.
+    """
+    key = (primary_chan, bw_mhz)
+    if key in _5GHZ_BONDED:
+        return _5GHZ_BONDED[key]
+    # Fallback: primary channel is both center and only member
+    return CH5.get(primary_chan, chan_to_freq(primary_chan)), [primary_chan]
+
+
+def get_ap_draw_center(ap: "AccessPoint") -> float:
+    """
+    MHz center to use when placing the spectrum shape for `ap`.
+    For 5 GHz this is the bonded-block center (not the primary channel freq).
+    For 2.4 / 6 GHz the primary channel center freq is returned unchanged.
+    """
+    if ap.band == "5 GHz" and ap.channel and ap.bandwidth_mhz > 20:
+        center, _ = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
+        if center:
+            return float(center)
+    return float(ap.freq_mhz)
+
+
+def get_ap_channel_span(ap: "AccessPoint") -> str:
+    """
+    Human-readable channel-span string for the table.
+    5 GHz examples: "116–128"  (80 MHz), "100–128" (160 MHz), "36" (20 MHz).
+    Other bands: frequency range, e.g. "2422–2462 MHz".
+    """
+    if ap.band == "5 GHz" and ap.channel:
+        _, chans = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
+        if len(chans) > 1:
+            return f"{chans[0]}–{chans[-1]}"
+        return str(ap.channel)
+    # 2.4 / 6 GHz — express as frequency range when wider than 20 MHz
+    if ap.bandwidth_mhz > 20 and ap.freq_mhz:
+        half = ap.bandwidth_mhz // 2
+        return f"{ap.freq_mhz - half}–{ap.freq_mhz + half}"
+    return str(ap.channel) if ap.channel else "?"
 
 
 def signal_color(signal: int) -> QColor:
@@ -645,7 +747,7 @@ _oui_full: Optional[Dict[str, str]] = None
 _oui_loaded = False
 
 # Path where we save the downloaded IEEE OUI database
-OUI_DATA_DIR = Path.home() / ".local" / "share" / "nmcli-gui"
+OUI_DATA_DIR = Path.home() / ".local" / "share" / "wavescope"
 OUI_JSON_PATH = OUI_DATA_DIR / "oui.json"
 OUI_IEEE_URL = "https://standards-oui.ieee.org/"
 OUI_IEEE_RE = re.compile(r"([0-9A-F]{2}-[0-9A-F]{2}-[0-9A-F]{2})\s+\(hex\)\s+(.+?)\n")
@@ -710,12 +812,12 @@ def get_manufacturer(bssid: str) -> str:
         _oui_full = _load_downloaded_oui() or _load_system_oui()
         _oui_loaded = True
     if not bssid:
-        return "Unknown"
+        return ""
     mac = bssid.upper().replace("-", ":")
     prefix = mac[:8]
     if _oui_full and prefix in _oui_full:
         return _oui_full[prefix]
-    return _EMBEDDED_OUI.get(prefix, "Unknown")
+    return _EMBEDDED_OUI.get(prefix, "")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -733,7 +835,7 @@ class OuiDownloadThread(QThread):
         try:
             self.progress.emit("Connecting to standards-oui.ieee.org…")
             req = urllib.request.Request(
-                OUI_IEEE_URL, headers={"User-Agent": "nmcli-gui-wifi-analyzer/1.0"}
+                OUI_IEEE_URL, headers={"User-Agent": "wavescope-wifi-analyzer/1.0"}
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 self.progress.emit("Downloading OUI data (may take a few seconds)…")
@@ -1253,7 +1355,8 @@ TABLE_HEADERS = [
     "Band",
     "Ch",
     "Freq (MHz)",
-    "BW (MHz)",
+    "Width (MHz)",
+    "Ch. Span",
     "Signal",
     "dBm",
     "Rate (Mbps)",
@@ -1273,15 +1376,16 @@ COL_BAND = 4
 COL_CHAN = 5
 COL_FREQ = 6
 COL_BW = 7
-COL_SIG = 8
-COL_DBM = 9
-COL_RATE = 10
-COL_SEC = 11
-COL_MODE = 12
-COL_GEN = 13  # WiFi generation (WiFi 4/5/6/6E/7)
-COL_UTIL = 14  # Channel utilisation %  (BSS Load)
-COL_CLIENTS = 15  # Station count          (BSS Load)
-COL_KVR = 16  # 802.11k/v/r roaming flags
+COL_SPAN = 8   # Channel span, e.g. "116–128" for ch116@80MHz on 5 GHz
+COL_SIG = 9
+COL_DBM = 10
+COL_RATE = 11
+COL_SEC = 12
+COL_MODE = 13
+COL_GEN = 14  # WiFi generation (WiFi 4/5/6/6E/7)
+COL_UTIL = 15  # Channel utilisation %  (BSS Load)
+COL_CLIENTS = 16  # Station count          (BSS Load)
+COL_KVR = 17  # 802.11k/v/r roaming flags
 
 
 class APTableModel(QAbstractTableModel):
@@ -1379,6 +1483,7 @@ class APTableModel(QAbstractTableModel):
                 COL_CHAN,
                 COL_FREQ,
                 COL_BW,
+                COL_SPAN,
                 COL_SIG,
                 COL_DBM,
                 COL_RATE,
@@ -1421,6 +1526,8 @@ class APTableModel(QAbstractTableModel):
             return str(ap.freq_mhz)
         if col == COL_BW:
             return str(ap.bandwidth_mhz)
+        if col == COL_SPAN:
+            return get_ap_channel_span(ap)
         if col == COL_SIG:
             return f"{ap.signal}%"
         if col == COL_DBM:
@@ -1652,6 +1759,57 @@ class DbmAxisItem(pg.AxisItem):
         p.restore()
 
 
+# ─── U-NII sub-band colour map for 5 GHz x-axis tick labels ─────────────────
+# Source: IEEE 802.11 / FCC U-NII band definitions
+#   U-NII-1  (5150–5250 MHz)  ch 32–48    — no DFS required
+#   U-NII-2A (5250–5350 MHz)  ch 52–64    — DFS/TPC required
+#   U-NII-2C (5470–5725 MHz)  ch 96–144   — DFS/TPC required (TDWR avoidance)
+#   U-NII-3  (5725–5850 MHz)  ch 149–165  — no DFS required
+#   U-NII-4  (5850–5925 MHz)  ch 169–177  — proposed / limited use
+_UNII_CHAN_COLORS: Dict[int, str] = {}
+for _ch in [32, 36, 40, 44, 48]:
+    _UNII_CHAN_COLORS[_ch] = "#81c995"   # U-NII-1  — soft green
+for _ch in [52, 56, 60, 64]:
+    _UNII_CHAN_COLORS[_ch] = "#64b5f6"   # U-NII-2A — soft blue
+for _ch in [100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144]:
+    _UNII_CHAN_COLORS[_ch] = "#ffcc80"   # U-NII-2C — soft amber
+for _ch in [149, 153, 157, 161, 165]:
+    _UNII_CHAN_COLORS[_ch] = "#a5d6a7"   # U-NII-3  — lighter green
+for _ch in [169, 173, 177]:
+    _UNII_CHAN_COLORS[_ch] = "#ef9a9a"   # U-NII-4  — light red (proposed)
+
+
+class FiveGhzBottomAxisItem(pg.AxisItem):
+    """
+    Custom x-axis for the 5 GHz panel.
+    Tick labels are colour-coded by U-NII sub-band so the spectrum layout
+    is immediately recognisable at a glance.
+    """
+
+    def drawPicture(self, p, axisSpec, tickSpecs, textSpecs):
+        p.save()
+        p.setRenderHint(p.RenderHint.Antialiasing, False)
+        p.setRenderHint(p.RenderHint.TextAntialiasing, True)
+        pen, p1, p2 = axisSpec
+        p.setPen(pen)
+        p.drawLine(p1, p2)
+        for pen, p1, p2 in tickSpecs:
+            p.setPen(pen)
+            p.drawLine(p1, p2)
+        if self.style.get("tickFont") is not None:
+            p.setFont(self.style["tickFont"])
+        default_pen = self.style.get("pen") or pg.mkPen("#8a96b0")
+        for rect, flags, text in textSpecs:
+            try:
+                ch = int(text)
+                hex_c = _UNII_CHAN_COLORS.get(ch)
+            except ValueError:
+                hex_c = None
+            p.setPen(pg.mkPen(hex_c) if hex_c else default_pen)
+            p.drawText(rect, int(flags), text)
+        p.restore()
+
+
 # ─── Clickable label for channel graph ───────────────────────────────────────
 class _ClickableLabel(pg.TextItem):
     """TextItem that fires a callback with the AP bssid when clicked."""
@@ -1783,6 +1941,8 @@ class ChannelGraphWidget(QWidget):
         axis_items: dict = {}
         if is_leftmost:
             axis_items["left"] = DbmAxisItem(orientation="left")
+        if band == "5 GHz":
+            axis_items["bottom"] = FiveGhzBottomAxisItem(orientation="bottom")
         pw = PlotWidget(axisItems=axis_items)
         pw.setBackground(self._theme_bg)
         pw.showGrid(x=True, y=True, alpha=0.18)
@@ -1900,7 +2060,9 @@ class ChannelGraphWidget(QWidget):
 
             for ap in band_aps:
                 color = self._ssid_colors.get(ap.ssid, QColor("#888888"))
-                unit = _channel_shape_unit(xs, ap.freq_mhz, max(ap.bandwidth_mhz, 20))
+                # Use the bonded-block center for 5 GHz (not just primary channel)
+                draw_center = get_ap_draw_center(ap)
+                unit = _channel_shape_unit(xs, draw_center, max(ap.bandwidth_mhz, 20))
                 ys = floor + (ap.dbm - floor) * unit
 
                 bc = QColor(color)
@@ -1923,7 +2085,7 @@ class ChannelGraphWidget(QWidget):
                 lf.setPointSize(8)
                 lf.setBold(True)
                 label.setFont(lf)
-                label.setPos(ap.freq_mhz, ap.dbm)
+                label.setPos(draw_center, ap.dbm)
                 pw.addItem(label)
 
                 self._items[ap.bssid] = {
@@ -3206,6 +3368,9 @@ class MainWindow(QMainWindow):
         self._proxy.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
         self._setup_ui()
+        # Whenever any filter changes (text, band, column include/exclude) the
+        # proxy emits layoutChanged — refresh the graph to show only visible APs.
+        self._proxy.layoutChanged.connect(self._on_filter_changed)
         self._scanner.start()
         self._status("Scanning…")
 
@@ -3484,10 +3649,29 @@ class MainWindow(QMainWindow):
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
+    def _visible_aps(self) -> List[AccessPoint]:
+        """Return the AccessPoint objects currently visible in the filtered table."""
+        result: List[AccessPoint] = []
+        for row in range(self._proxy.rowCount()):
+            src_idx = self._proxy.mapToSource(self._proxy.index(row, 0))
+            ap = self._model.ap_at(src_idx.row())
+            if ap is not None:
+                result.append(ap)
+        return result
+
+    def _on_filter_changed(self):
+        """Called whenever the proxy filter changes — sync the channel graph."""
+        visible = self._visible_aps()
+        self._channel_graph.update_aps(visible, self._model.ssid_colors())
+        shown = self._proxy.rowCount()
+        self._lbl_count.setText(f"  {shown}/{len(self._aps)} APs")
+
     def _on_data(self, aps: List[AccessPoint]):
         self._aps = aps
         self._model.update(aps)
-        self._channel_graph.update_aps(aps, self._model.ssid_colors())
+        # model.update() emits modelReset (not layoutChanged), so the proxy's
+        # layoutChanged won't fire — update the graph explicitly here.
+        self._channel_graph.update_aps(self._visible_aps(), self._model.ssid_colors())
         self._history_graph.set_ssid_colors(self._model.ssid_colors())
         self._history_graph.push(aps)
         # Auto-fit SSID and Manufacturer to their content, unless the user
@@ -3546,11 +3730,8 @@ class MainWindow(QMainWindow):
         self._user_sized_cols.add(col)
 
     def _on_band_change(self, band: str):
-        self._proxy.set_band(band)
+        self._proxy.set_band(band)  # → invalidateFilter → layoutChanged → _on_filter_changed
         self._channel_graph.set_band(band)
-        self._channel_graph.update_aps(self._aps, self._model.ssid_colors())
-        cnt = self._proxy.rowCount()
-        self._lbl_count.setText(f"  {cnt}/{len(self._aps)} APs")
 
     def _on_interval_change(self, idx: int):
         secs = REFRESH_INTERVALS[idx]
@@ -3667,6 +3848,7 @@ class MainWindow(QMainWindow):
             (COL_MANUF, ap.manufacturer, "Manufacturer"),
             (COL_BSSID, ap.bssid, "MAC address"),
             (COL_CHAN, str(ap.channel), "Channel"),
+            (COL_BW, str(ap.bandwidth_mhz), "Channel Width"),
             (COL_BAND, ap.band, "Band"),
             (COL_SEC, ap.security_short, "Security"),
         ]
@@ -3872,7 +4054,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setDesktopFileName("wavescope")  # GNOME dock grouping / WM_CLASS hint
-    app.setOrganizationName("nmcli-gui")
+    app.setOrganizationName("wavescope")
     app.setStyle("Fusion")
     _icon_path = Path(__file__).parent / "assets" / "icon.svg"
     if _icon_path.exists():
