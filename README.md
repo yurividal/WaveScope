@@ -37,7 +37,7 @@ WaveScope is an open-source WiFi analyzer designed for Linux desktops. It gives 
 | | |
 |---|---|
 | **OS** | Linux |
-| **Tested on** | Ubuntu 22.04 / 24.04 |
+| **Tested on** | Ubuntu 22.04 / 24.04, Fedora 39+ |
 | **Requires** | NetworkManager (`nmcli`), `iw` |
 | **Python** | 3.10 or newer |
 
@@ -65,7 +65,24 @@ libxcb-cursor0, libxcb-xinerama0, libxcb-randr0
 
 ---
 
-### Option B — Run from source
+### Option B — Fedora / RHEL (.rpm package) ✅ Recommended
+
+Download the latest `.rpm` from the [Releases](https://github.com/yurividal/WaveScope/releases) page:
+
+```bash
+sudo dnf install ./wavescope_*.rpm
+wavescope
+```
+
+**System dependencies** (installed automatically as `.rpm` dependencies):
+```
+python3 (≥3.10), python3-pip,
+NetworkManager, iw, tcpdump, polkit, xcb-util-cursor
+```
+
+---
+
+### Option C — Run from source
 
 ```bash
 # Clone
@@ -80,13 +97,25 @@ chmod +x install.sh
 
 ---
 
-## Build .deb from source
+## Build packages from source
+
+### .deb (Debian/Ubuntu)
 
 ```bash
 # Requires: dpkg-dev
 chmod +x build_deb.sh
-./build_deb.sh 1.0.0
-sudo dpkg -i wavescope_1.0.0_all.deb
+./build_deb.sh
+sudo dpkg -i wavescope_*.deb
+```
+
+### .rpm (Fedora/RHEL)
+
+```bash
+# Requires: rpm-build
+# sudo dnf install rpm-build
+chmod +x build_rpm.sh
+./build_rpm.sh
+sudo dnf install ./wavescope_*.rpm
 ```
 
 ---
