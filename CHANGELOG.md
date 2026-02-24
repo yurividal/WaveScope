@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.8.1 — 2026-02-24
+
+### Fixes
+- Details tab now applies dark-mode styling on first launch, matching the appearance after any subsequent theme switch (no more visible box borders appearing only after a theme change).
+- Default linger duration reduced from 120 s to 60 s.
+
 ## v1.8.0 — 2026-02-24
 
 ### Highlights
