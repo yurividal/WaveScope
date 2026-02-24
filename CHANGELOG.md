@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.7.0 — 2026-02-24
+
+### Highlights
+- **Hidden network detection** — startup scan now runs two back-to-back `--rescan yes` sweeps so hidden APs (e.g. 5 GHz networks that require a probe response) appear on the very first result, instead of taking 30–45 s.
+- **6 GHz rate fix** — 6 GHz APs no longer show 0 Mbit/s; theoretical max rate is now computed from HE Capabilities (NSS × MCS table per IEEE 802.11ax) when nmcli returns 0.
+- **Channel Allocation graphs** — new "🗺️ Channel Allocations" toolbar button opens a combined reference dialog with 2.4 GHz, 5 GHz, and 6 GHz allocation tables, zoomable and horizontally stretching to fill the window.
+- **Linger / ghost mode** — APs that disappear from scans remain visible (dimmed) for a configurable window (default 60 s) so transient dropouts don't cause entries to flicker in and out.
+- **Sticky non-zero fields** — bandwidth, rate, Wi-Fi gen, country, and center frequency no longer blank out due to transient nmcli parse misses; last known good value is preserved.
+- **Code modularisation** — core logic split into focused modules (`core_models`, `core_scanner`, `core_table`, `core_base`, `main_window_ui`, `main_window_logic`) for easier maintenance.
+- **New vendor icon** — DASAN Networks added to the vendor icon set.
+
 ## v1.6.0 — 2026-02-22
 
 ### Highlights
