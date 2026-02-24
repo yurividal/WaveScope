@@ -160,7 +160,7 @@ DIALOG_NOTE_LIGHT = "#4a5a73"
 # Details card (slightly deeper background than the allocation dialog)
 CARD_BG_DARK = "#121a27"
 CARD_VALUE_BG_DARK = DIALOG_BG_DARK
-CARD_VALUE_BORDER_DARK = "#2a3850"
+CARD_VALUE_BORDER_DARK = CARD_VALUE_BG_DARK  # match bg → no visible border in dark mode
 CARD_VALUE_BG_LIGHT = "#eef3fb"
 CARD_VALUE_BORDER_LIGHT = "#c8d6ee"
 

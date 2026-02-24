@@ -31,6 +31,9 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self._proxy.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
 
         self._setup_ui()
+        # Apply initial theme styling to the details/connection cards so the
+        # first-launch appearance matches what the user sees after any theme switch.
+        self._apply_details_theme(True)
         # Whenever any filter changes (text, band, column include/exclude) the
         # proxy emits layoutChanged — refresh the graph to show only visible APs.
         self._proxy.layoutChanged.connect(self._on_filter_changed)
