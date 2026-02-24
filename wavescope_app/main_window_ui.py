@@ -65,10 +65,10 @@ class MainWindowUIMixin:
         self._btn_pause = QPushButton("⏸ Pause")
         self._btn_pause.setCheckable(True)
         self._btn_pause.setStyleSheet(
-            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
             " border-radius:3px; padding:2px 8px; }"
-            "QPushButton:hover { background:#1a2a40; }"
-            "QPushButton:checked { color:#f9a825; border-color:#7a5a00; background:#2a2010; }"
+            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
+            f"QPushButton:checked {{ color:{BTN_CHECKED_TEXT}; border-color:{BTN_CHECKED_BORDER}; background:{BTN_CHECKED_BG}; }}"
         )
         self._btn_pause.toggled.connect(self._on_pause)
         tb.addWidget(self._btn_pause)
@@ -79,9 +79,9 @@ class MainWindowUIMixin:
         self._btn_oui = QPushButton("📖 Update OUI DB")
         self._btn_oui.setToolTip("Download / refresh the IEEE manufacturer database")
         self._btn_oui.setStyleSheet(
-            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
             " border-radius:3px; padding:2px 8px; }"
-            "QPushButton:hover { background:#1a2a40; }"
+            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
         )
         self._btn_oui.clicked.connect(self._on_update_oui)
         tb.addWidget(self._btn_oui)
@@ -95,9 +95,9 @@ class MainWindowUIMixin:
             "Requires root — will temporarily disconnect WiFi"
         )
         self._btn_monitor.setStyleSheet(
-            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
             " border-radius:3px; padding:2px 8px; }"
-            "QPushButton:hover { background:#1a2a40; }"
+            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
         )
         self._btn_monitor.clicked.connect(self._on_monitor_mode)
         tb.addWidget(self._btn_monitor)
@@ -112,15 +112,15 @@ class MainWindowUIMixin:
 
         # Active column-filter badge + clear button
         self._lbl_filters = QLabel()
-        self._lbl_filters.setStyleSheet("color:#f9a825; font-size:9pt;")
+        self._lbl_filters.setStyleSheet(f"color:{BTN_CHECKED_TEXT}; font-size:9pt;")
         self._lbl_filters.hide()
         tb.addWidget(self._lbl_filters)
 
         self._btn_clear_filters = QPushButton("✕ Clear filters")
         self._btn_clear_filters.setStyleSheet(
-            "QPushButton{color:#f9a825;border:1px solid #f9a825;"
+            f"QPushButton{{color:{BTN_CHECKED_TEXT};border:1px solid {BTN_CHECKED_TEXT};"
             "border-radius:3px;padding:1px 6px;font-size:9pt;}"
-            "QPushButton:hover{background:#2a2010;}"
+            f"QPushButton:hover{{background:{BTN_CHECKED_BG};}}"
         )
         self._btn_clear_filters.clicked.connect(self._on_clear_col_filters)
         self._btn_clear_filters.hide()
@@ -199,7 +199,7 @@ class MainWindowUIMixin:
         # Hidden permanently once the first _on_data() fires.
         self._scan_overlay = QFrame(self._table)
         self._scan_overlay.setStyleSheet(
-            "QFrame { background-color: rgba(10,15,30,210); border-radius: 0px; }"
+            f"QFrame {{ background-color: {SCAN_OVERLAY_BG}; border-radius: 0px; }}"
         )
         _ov_layout = QVBoxLayout(self._scan_overlay)
         _ov_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -211,14 +211,14 @@ class MainWindowUIMixin:
         self._scan_overlay_lbl = QLabel("Scanning for networks…")
         self._scan_overlay_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._scan_overlay_lbl.setStyleSheet(
-            "color:#9bbfe0; font-size:18px; font-weight:600;"
+            f"color:{SCAN_OVERLAY_HEADING}; font-size:18px; font-weight:600;"
             "background:transparent; border:none;"
         )
         _ov_layout.addWidget(self._scan_overlay_lbl)
         _ov_sub = QLabel("First scan runs a full sweep — this may take a few seconds.")
         _ov_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         _ov_sub.setStyleSheet(
-            "color:#506070; font-size:11px; background:transparent; border:none;"
+            f"color:{SCAN_OVERLAY_SUB}; font-size:11px; background:transparent; border:none;"
         )
         _ov_layout.addWidget(_ov_sub)
         self._scan_overlay.setGeometry(self._table.rect())
@@ -606,9 +606,9 @@ class MainWindowUIMixin:
             "Open 5 GHz & 6 GHz channel-allocation reference charts"
         )
         self._btn_allocations.setStyleSheet(
-            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
             " border-radius:3px; padding:1px 6px; font-size:9pt; }"
-            "QPushButton:hover { background:#1a2a40; }"
+            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
         )
         self._btn_allocations.clicked.connect(self._on_open_allocations)
         sb.addPermanentWidget(self._btn_allocations)

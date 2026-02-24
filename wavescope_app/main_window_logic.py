@@ -8,7 +8,19 @@ from .core import *
 from .core_vendor import _resolve_vendor_icon_path
 from .graphs import ChannelAllocationsDialog
 from .capture import CaptureTypeDialog, ManagedCaptureWindow, MonitorModeWindow
-from .theme import IW_GEN_COLORS, _dark_palette, _light_palette
+from .theme import (
+    IW_GEN_COLORS, _dark_palette, _light_palette,
+    GRAPH_BG_DARK, GRAPH_BG_LIGHT, GRAPH_FG_DARK, GRAPH_FG_LIGHT,
+    CARD_BG_DARK, CARD_VALUE_BG_DARK, CARD_VALUE_BORDER_DARK,
+    CARD_VALUE_BG_LIGHT, CARD_VALUE_BORDER_LIGHT,
+    DIALOG_BORDER_DARK, DIALOG_BORDER_LIGHT,
+    DIALOG_TEXT_DARK, DIALOG_TEXT_LIGHT,
+    DIALOG_NOTE_DARK, DIALOG_NOTE_LIGHT,
+    SIG_POOR, SIG_WEAK, SIG_FAIR, SIG_EXCELLENT,
+    SEC_BAD, SEC_WPA2, SEC_WPA3, SEC_OTHER, PMF_OPTIONAL,
+    MENU_BG, MENU_BORDER, MENU_TEXT, MENU_SELECTED,
+    CONNECTED_GREEN, HTML_MUTED, FALLBACK_GRAY,
+)
 
 
 class MainWindowLogicMixin:
@@ -352,11 +364,11 @@ class MainWindowLogicMixin:
         app = QApplication.instance()
         if mode == "dark":
             app.setPalette(_dark_palette())
-            plot_bg, plot_fg = "#0d1117", "#a9b4cc"
+            plot_bg, plot_fg = GRAPH_BG_DARK, GRAPH_FG_DARK
             is_dark = True
         elif mode == "light":
             app.setPalette(_light_palette())
-            plot_bg, plot_fg = "#f0f4f8", "#444455"
+            plot_bg, plot_fg = GRAPH_BG_LIGHT, GRAPH_FG_LIGHT
             is_dark = False
         else:  # auto — match system dark/light, use our own palette
             from PyQt6.QtCore import Qt as _Qt
@@ -371,7 +383,7 @@ class MainWindowLogicMixin:
                 is_dark = sp.color(QPalette.ColorRole.Window).lightness() < 128
             app.setPalette(_dark_palette() if is_dark else _light_palette())
             plot_bg, plot_fg = (
-                ("#0d1117", "#a9b4cc") if is_dark else ("#f0f4f8", "#444455")
+                (GRAPH_BG_DARK, GRAPH_FG_DARK) if is_dark else (GRAPH_BG_LIGHT, GRAPH_FG_LIGHT)
             )
         pg.setConfigOptions(foreground=plot_fg, background=plot_bg)
         self._channel_graph.set_theme(plot_bg, plot_fg)
@@ -383,19 +395,19 @@ class MainWindowLogicMixin:
 
     def _apply_details_theme(self, is_dark: bool):
         if is_dark:
-            card_bg = "#121a27"
-            card_border = "#273248"
-            name_color = "#8ea0bf"
-            value_bg = "#0f1622"
-            value_border = "#2a3850"
-            value_color = "#dfe7f5"
+            card_bg = CARD_BG_DARK
+            card_border = DIALOG_BORDER_DARK
+            name_color = DIALOG_NOTE_DARK
+            value_bg = CARD_VALUE_BG_DARK
+            value_border = CARD_VALUE_BORDER_DARK
+            value_color = DIALOG_TEXT_DARK
         else:
-            card_bg = "#ffffff"
-            card_border = "#c7d2e3"
-            name_color = "#4a5a73"
-            value_bg = "#eef3fb"
-            value_border = "#c8d6ee"
-            value_color = "#22314a"
+            card_bg = DIALOG_BG_LIGHT
+            card_border = DIALOG_BORDER_LIGHT
+            name_color = DIALOG_NOTE_LIGHT
+            value_bg = CARD_VALUE_BG_LIGHT
+            value_border = CARD_VALUE_BORDER_LIGHT
+            value_color = DIALOG_TEXT_LIGHT
 
         details_style = (
             f"QFrame#detailsCard {{"
@@ -559,9 +571,9 @@ class MainWindowLogicMixin:
 
         menu = QMenu(self)
         menu.setStyleSheet(
-            "QMenu{background:#131926;border:1px solid #2a3350;color:#d0d8f0;}"
-            "QMenu::item:selected{background:#1e4a80;}"
-            "QMenu::separator{height:1px;background:#2a3350;margin:3px 8px;}"
+            f"QMenu{{background:{MENU_BG};border:1px solid {MENU_BORDER};color:{MENU_TEXT};}}"
+            f"QMenu::item:selected{{background:{MENU_SELECTED};}}"
+            f"QMenu::separator{{height:1px;background:{MENU_BORDER};margin:3px 8px;}}"
         )
 
         # ── Filterable columns ────────────────────────────────────────────
@@ -657,7 +669,7 @@ class MainWindowLogicMixin:
         self._refresh_filter_badge()
 
     def _show_details(self, ap: AccessPoint):
-        color = self._model.ssid_colors().get(ap.ssid, QColor("#888888")).name()
+        color = self._model.ssid_colors().get(ap.ssid, QColor(FALLBACK_GRAY)).name()
         sig_col = signal_color(ap.signal).name()
 
         def badge(text, bg=None, fg=None):
@@ -670,12 +682,12 @@ class MainWindowLogicMixin:
             return f'<span style="font-size:14px;font-weight:600">{text}</span>'
 
         def dim(text):
-            return f"<span style='color:#777'>{text}</span>"
+            return f"<span style='color:{HTML_MUTED}'>{text}</span>"
 
         # ── SSID header ───────────────────────────────────────────────────
         in_use = (
             (
-                ' &nbsp;<span style="font-size:13px;font-weight:600;color:#2e7d32;">'
+                f' &nbsp;<span style="font-size:13px;font-weight:600;color:{CONNECTED_GREEN};">'
                 "▲ CONNECTED</span>"
             )
             if ap.in_use
@@ -686,7 +698,7 @@ class MainWindowLogicMixin:
         )
 
         # ── WiFi generation ───────────────────────────────────────────────
-        gen_color = IW_GEN_COLORS.get(ap.wifi_gen, "#37474F")
+        gen_color = IW_GEN_COLORS.get(ap.wifi_gen, SEC_OTHER)
         if ap.wifi_gen:
             gen_html = badge(f"{ap.wifi_gen}  ·  {ap.protocol}", gen_color)
         else:
@@ -755,16 +767,16 @@ class MainWindowLogicMixin:
             sec_display = "Open"
 
         if sec_display == "Open":
-            sec_html = badge(sec_display, "#b71c1c")
+            sec_html = badge(sec_display, SEC_BAD)
         elif "WPA3" in sec_display or "SAE" in sec_display:
-            sec_html = badge(sec_display, "#1b5e20")
+            sec_html = badge(sec_display, SEC_WPA3)
         elif "WPA2" in sec_display:
-            sec_html = badge(sec_display, "#0d47a1")
+            sec_html = badge(sec_display, SEC_WPA2)
         else:
-            sec_html = badge(sec_display, "#37474F")
+            sec_html = badge(sec_display, SEC_OTHER)
 
         # ── PMF ───────────────────────────────────────────────────────────
-        pmf_map = {"Required": "#1b5e20", "Optional": "#e65100", "No": "#b71c1c"}
+        pmf_map = {"Required": SEC_WPA3, "Optional": PMF_OPTIONAL, "No": SEC_BAD}
         pmf_c = pmf_map.get(ap.pmf)
         pmf_html = badge(ap.pmf, pmf_c) if pmf_c else dim(ap.pmf or "Unknown")
 
@@ -772,13 +784,13 @@ class MainWindowLogicMixin:
         util_pct = ap.chan_util_pct
         if util_pct is not None:
             if util_pct >= 75:
-                uc = "#f44336"
+                uc = SIG_POOR
             elif util_pct >= 50:
-                uc = "#ff9800"
+                uc = SIG_WEAK
             elif util_pct >= 25:
-                uc = "#ffc107"
+                uc = SIG_FAIR
             else:
-                uc = "#4caf50"
+                uc = SIG_EXCELLENT
             util_html = f'<span style="color:{uc};font-size:15px;font-weight:700">{util_pct}%</span>'
         else:
             util_html = dim("No BSS Load IE")
@@ -959,7 +971,7 @@ class MainWindowLogicMixin:
 
     def _show_connection(self):
         def dim(text):
-            return f"<span style='color:#777'>{text}</span>"
+            return f"<span style='color:{HTML_MUTED}'>{text}</span>"
 
         connected_ap = next(
             (
@@ -983,7 +995,7 @@ class MainWindowLogicMixin:
         v = self._conn_vals
         if connected_ap is None:
             self._conn_ssid.setText(
-                "<span style='font-size:20px;font-weight:700;color:#777'>Wifi not connected</span>"
+                f"<span style='font-size:20px;font-weight:700;color:{HTML_MUTED}'>Wifi not connected</span>"
             )
             v["status"].setText(dim("Wifi not connected"))
             for key in (
@@ -1027,9 +1039,9 @@ class MainWindowLogicMixin:
 
         ap = connected_ap
 
-        color = self._model.ssid_colors().get(ap.ssid, QColor("#888888")).name()
+        color = self._model.ssid_colors().get(ap.ssid, QColor(FALLBACK_GRAY)).name()
         connected_badge = (
-            " &nbsp;<span style='font-size:13px;font-weight:600;color:#2e7d32;'>"
+            f" &nbsp;<span style='font-size:13px;font-weight:600;color:{CONNECTED_GREEN};'>"
             "CONNECTED AP</span>"
         )
         self._conn_ssid.setText(

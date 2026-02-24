@@ -155,11 +155,11 @@ class CaptureTypeDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
 
         title = QLabel("Choose capture type")
-        title.setStyleSheet("font-size:13pt; font-weight:bold; color:#e0e0e0;")
+        title.setStyleSheet(f"font-size:13pt; font-weight:bold; color:{CAPTURE_TITLE_FG};")
         layout.addWidget(title)
 
         note = QLabel("Both modes require a root password prompt (pkexec / Polkit).")
-        note.setStyleSheet("font-size:9pt; color:#888;")
+        note.setStyleSheet(f"font-size:9pt; color:{FALLBACK_GRAY};")
         layout.addWidget(note)
         layout.addSpacing(4)
 
@@ -169,8 +169,8 @@ class CaptureTypeDialog(QDialog):
             "Disconnects your WiFi and creates a raw monitor interface (mon0).\n"
             "Captures ALL frames on the chosen channel — beacons, probes, data\n"
             "from every nearby device. Best for deep wireless analysis.",
-            "#1a3050",
-            "#1e4a80",
+            CAPTURE_CARD_MON_BG,
+            CAPTURE_CARD_MON_HOVER,
         )
         btn_mon.clicked.connect(lambda: self._pick("monitor"))
         layout.addWidget(btn_mon)
@@ -181,8 +181,8 @@ class CaptureTypeDialog(QDialog):
             "Keeps your WiFi connection intact. Captures only traffic\n"
             "to/from this machine on the current network.\n"
             "Ideal for debugging your own connection without losing internet.",
-            "#1a3a1a",
-            "#1e5a22",
+            CAPTURE_CARD_MGD_BG,
+            CAPTURE_CARD_MGD_HOVER,
         )
         btn_mgd.clicked.connect(lambda: self._pick("managed"))
         layout.addWidget(btn_mgd)
@@ -212,7 +212,7 @@ class CaptureTypeDialog(QDialog):
 
             def _apply_style(self, color):
                 self.setStyleSheet(
-                    f"QFrame {{ background:{color}; border:1px solid #334;"
+                    f"QFrame {{ background:{color}; border:1px solid {CAPTURE_CARD_BORDER};"
                     f" border-radius:8px; }}"
                 )
 
@@ -231,11 +231,11 @@ class CaptureTypeDialog(QDialog):
         inner.setContentsMargins(14, 12, 14, 12)
         inner.setSpacing(3)
         lbl_t = QLabel(title)
-        lbl_t.setStyleSheet("font-size:12pt; font-weight:bold; color:#ffffff;")
+        lbl_t.setStyleSheet(f"font-size:12pt; font-weight:bold; color:{CAPTURE_CARD_TITLE_FG};")
         lbl_s = QLabel(subtitle)
-        lbl_s.setStyleSheet("font-size:9.5pt; color:#aad4ff; font-style:italic;")
+        lbl_s.setStyleSheet(f"font-size:9.5pt; color:{CAPTURE_CARD_SUB_FG}; font-style:italic;")
         lbl_b = QLabel(body)
-        lbl_b.setStyleSheet("font-size:9pt; color:#b0c8d8; margin-top:4px;")
+        lbl_b.setStyleSheet(f"font-size:9pt; color:{CAPTURE_CARD_BODY_FG}; margin-top:4px;")
         lbl_b.setWordWrap(True)
         for lbl in (lbl_t, lbl_s, lbl_b):
             lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -301,7 +301,7 @@ class MonitorModeWindow(QDialog):
         warn.setWordWrap(True)
         warn.setTextFormat(Qt.TextFormat.RichText)
         warn.setStyleSheet(
-            "QLabel { background:#2a1800; color:#ffcc66; border:1px solid #a06010;"
+            f"QLabel {{ background:{CAPTURE_WARN_BG}; color:{CAPTURE_WARN_FG}; border:1px solid {CAPTURE_WARN_BORDER};"
             " border-radius:5px; padding:8px 12px; }"
         )
         layout.addWidget(warn)
@@ -350,10 +350,10 @@ class MonitorModeWindow(QDialog):
         self._btn_start = QPushButton("▶  Start Capture")
         self._btn_start.setMinimumHeight(38)
         self._btn_start.setStyleSheet(
-            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            f"QPushButton {{ background:{CAPTURE_BTN_START_BG}; color:{CAPTURE_BTN_START_FG}; border:none;"
             " border-radius:5px; font-size:11pt; font-weight:bold; }"
-            "QPushButton:hover { background:#226b33; }"
-            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+            f"QPushButton:hover {{ background:{CAPTURE_BTN_START_HOVER}; }}"
+            f"QPushButton:disabled {{ background:{CAPTURE_BTN_DIS_BG}; color:{CAPTURE_BTN_DIS_FG}; }}"
         )
         self._btn_start.clicked.connect(self._on_start_stop)
         layout.addWidget(self._btn_start)
@@ -361,11 +361,11 @@ class MonitorModeWindow(QDialog):
         # ── Status row ────────────────────────────────────────────────────
         stats_row = QHBoxLayout()
         self._lbl_state = QLabel("Idle")
-        self._lbl_state.setStyleSheet("font-weight:bold; color:#7eb8f7;")
+        self._lbl_state.setStyleSheet(f"font-weight:bold; color:{BTN_ACCENT};")
         self._lbl_elapsed = QLabel("00:00")
-        self._lbl_elapsed.setStyleSheet("color:#a9b4cc; font-family:monospace;")
+        self._lbl_elapsed.setStyleSheet(f"color:{GRAPH_FG_DARK}; font-family:monospace;")
         self._lbl_size = QLabel("")
-        self._lbl_size.setStyleSheet("color:#a9b4cc;")
+        self._lbl_size.setStyleSheet(f"color:{GRAPH_FG_DARK};")
         stats_row.addWidget(self._lbl_state)
         stats_row.addStretch()
         stats_row.addWidget(QLabel("Elapsed: "))
@@ -381,7 +381,7 @@ class MonitorModeWindow(QDialog):
         self._log.setReadOnly(True)
         self._log.setMaximumBlockCount(500)
         self._log.setStyleSheet(
-            "QPlainTextEdit { background:#090d14; color:#8fa8c0;"
+            f"QPlainTextEdit {{ background:{CAPTURE_LOG_BG}; color:{CAPTURE_LOG_FG};"
             " font-family:monospace; font-size:9pt; border-radius:4px; }"
         )
         layout.addWidget(self._log)
@@ -577,10 +577,10 @@ class MonitorModeWindow(QDialog):
         self._set_state(self._ST_IDLE, label)
         self._btn_start.setText("▶  Start Capture")
         self._btn_start.setStyleSheet(
-            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            f"QPushButton {{ background:{CAPTURE_BTN_START_BG}; color:{CAPTURE_BTN_START_FG}; border:none;"
             " border-radius:5px; font-size:11pt; font-weight:bold; }"
-            "QPushButton:hover { background:#226b33; }"
-            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+            f"QPushButton:hover {{ background:{CAPTURE_BTN_START_HOVER}; }}"
+            f"QPushButton:disabled {{ background:{CAPTURE_BTN_DIS_BG}; color:{CAPTURE_BTN_DIS_FG}; }}"
         )
         self._btn_start.setEnabled(True)
         try:
@@ -691,9 +691,9 @@ class MonitorModeWindow(QDialog):
         if state == self._ST_CAPTURE:
             self._btn_start.setText("⏹  Stop Capture")
             self._btn_start.setStyleSheet(
-                "QPushButton { background:#6b1a1a; color:#ffcccc; border:none;"
+                f"QPushButton {{ background:{CAPTURE_BTN_STOP_BG}; color:{CAPTURE_BTN_STOP_FG}; border:none;"
                 " border-radius:5px; font-size:11pt; font-weight:bold; }"
-                "QPushButton:hover { background:#7f2020; }"
+                f"QPushButton:hover {{ background:{CAPTURE_BTN_STOP_HOVER}; }}"
             )
             self._btn_start.setEnabled(True)
         elif state in (self._ST_SETUP, self._ST_TEARDOWN):
@@ -785,7 +785,7 @@ class ManagedCaptureWindow(QDialog):
         )
         banner.setWordWrap(True)
         banner.setStyleSheet(
-            "background:#1e2e10; color:#cceeaa; padding:8px 10px;"
+            f"background:{CAPTURE_BANNER_BG}; color:{CAPTURE_BANNER_FG}; padding:8px 10px;"
             " border-radius:5px; font-size:9pt;"
         )
         layout.addWidget(banner)
@@ -812,7 +812,7 @@ class ManagedCaptureWindow(QDialog):
         self._lbl_state = QLabel("Idle")
         self._lbl_elapsed = QLabel("00:00")
         self._lbl_size = QLabel("File:  0 KB")
-        self._lbl_state.setStyleSheet("color:#88bb88; font-weight:bold;")
+        self._lbl_state.setStyleSheet(f"color:{CAPTURE_MGD_STATE_FG}; font-weight:bold;")
         status_row.addWidget(self._lbl_state)
         status_row.addStretch()
         status_row.addWidget(QLabel("Elapsed:"))
@@ -824,7 +824,7 @@ class ManagedCaptureWindow(QDialog):
         self._log = QTextEdit()
         self._log.setReadOnly(True)
         self._log.setStyleSheet(
-            "background:#0e1a0e; color:#a0d8a0; font-family:monospace;"
+            f"background:{CAPTURE_MGD_LOG_BG}; color:{CAPTURE_MGD_LOG_FG}; font-family:monospace;"
             " font-size:9pt; border-radius:4px;"
         )
         layout.addWidget(self._log, 1)
@@ -832,10 +832,10 @@ class ManagedCaptureWindow(QDialog):
         self._btn_start = QPushButton("\u25b6  Start Capture")
         self._btn_start.setMinimumHeight(42)
         self._btn_start.setStyleSheet(
-            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            f"QPushButton {{ background:{CAPTURE_BTN_START_BG}; color:{CAPTURE_BTN_START_FG}; border:none;"
             " border-radius:5px; font-size:11pt; font-weight:bold; }"
-            "QPushButton:hover { background:#226b33; }"
-            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+            f"QPushButton:hover {{ background:{CAPTURE_BTN_START_HOVER}; }}"
+            f"QPushButton:disabled {{ background:{CAPTURE_BTN_DIS_BG}; color:{CAPTURE_BTN_DIS_FG}; }}"
         )
         self._btn_start.clicked.connect(self._on_btn)
         layout.addWidget(self._btn_start)
@@ -909,9 +909,9 @@ class ManagedCaptureWindow(QDialog):
         self._set_state(self._ST_CAPTURE, "Starting\u2026")
         self._btn_start.setText("\u23f9  Stop Capture")
         self._btn_start.setStyleSheet(
-            "QPushButton { background:#6b1a1a; color:#ffcccc; border:none;"
+            f"QPushButton {{ background:{CAPTURE_BTN_STOP_BG}; color:{CAPTURE_BTN_STOP_FG}; border:none;"
             " border-radius:5px; font-size:11pt; font-weight:bold; }"
-            "QPushButton:hover { background:#7f2020; }"
+            f"QPushButton:hover {{ background:{CAPTURE_BTN_STOP_HOVER}; }}"
         )
         self._log_line("\u25b6  Starting (Polkit authentication may appear\u2026)")
 
@@ -1033,10 +1033,10 @@ class ManagedCaptureWindow(QDialog):
         self._set_state(self._ST_IDLE, label)
         self._btn_start.setText("\u25b6  Start Capture")
         self._btn_start.setStyleSheet(
-            "QPushButton { background:#1a5c2a; color:#ccffcc; border:none;"
+            f"QPushButton {{ background:{CAPTURE_BTN_START_BG}; color:{CAPTURE_BTN_START_FG}; border:none;"
             " border-radius:5px; font-size:11pt; font-weight:bold; }"
-            "QPushButton:hover { background:#226b33; }"
-            "QPushButton:disabled { background:#1a2210; color:#446644; }"
+            f"QPushButton:hover {{ background:{CAPTURE_BTN_START_HOVER}; }}"
+            f"QPushButton:disabled {{ background:{CAPTURE_BTN_DIS_BG}; color:{CAPTURE_BTN_DIS_FG}; }}"
         )
         self._btn_start.setEnabled(True)
         try:

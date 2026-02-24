@@ -10,6 +10,28 @@ from .theme import (
     UNII6_CHAN_COLORS,
     UNII_CHAN_COLORS,
     UNII_NAME_COLORS,
+    SIG_EXCELLENT, SIG_GOOD, SIG_FAIR, SIG_WEAK, SIG_POOR,
+    GRAPH_BG_DARK, GRAPH_AXIS_DARK, GRAPH_AXIS_LIGHT,
+    FALLBACK_GRAY,
+    DFS_AXIS_COLOR, DFS_FILL_COLOR,
+    ALLOC_GRID_DARK, ALLOC_GRID_LIGHT,
+    ALLOC_CELL_BG_DARK, ALLOC_CELL_BG_LIGHT,
+    ALLOC_LBL_BG_DARK, ALLOC_LBL_BG_LIGHT,
+    ALLOC_TEXT_DARK, ALLOC_TEXT_LIGHT,
+    ALLOC_DIM_DARK, ALLOC_DIM_LIGHT,
+    ALLOC_WHITE, ALLOC_BLACK, ALLOC_ONBAND_DARK,
+    DIALOG_BG_DARK, DIALOG_BG_LIGHT,
+    DIALOG_BORDER_DARK, DIALOG_BORDER_LIGHT,
+    DIALOG_TEXT_DARK, DIALOG_TEXT_LIGHT,
+    DIALOG_NOTE_DARK, DIALOG_NOTE_LIGHT,
+    PLAN_2G_ISM_HEADER, PLAN_2G_JP_HEADER,
+    PLAN_CH1, PLAN_CH6, PLAN_CH11,
+    PLAN_EU_CH5, PLAN_EU_CH13,
+    PLAN_JP_CH5, PLAN_JP_CH10,
+    ALLOC_5G_U1, ALLOC_5G_U2A, ALLOC_5G_U2C, ALLOC_5G_U3,
+    ALLOC_5G_36_48, ALLOC_5G_52_116, ALLOC_5G_120_128,
+    ALLOC_5G_132_144, ALLOC_5G_149_165, ALLOC_5G_DFS_BAND,
+    ALLOC_6G_U5, ALLOC_6G_U6, ALLOC_6G_U7, ALLOC_6G_U8,
 )
 
 
@@ -41,11 +63,11 @@ class DbmAxisItem(pg.AxisItem):
     """
 
     _BANDS = [
-        (-50, 0, "#4caf50"),  # excellent — green
-        (-60, -50, "#8bc34a"),  # good      — lime
-        (-70, -60, "#ffc107"),  # fair      — amber
-        (-80, -70, "#ff9800"),  # weak      — orange
-        (-200, -80, "#f44336"),  # poor      — red
+        (-50, 0, SIG_EXCELLENT),   # excellent — green
+        (-60, -50, SIG_GOOD),      # good      — lime
+        (-70, -60, SIG_FAIR),      # fair      — amber
+        (-80, -70, SIG_WEAK),      # weak      — orange
+        (-200, -80, SIG_POOR),     # poor      — red
     ]
 
     def _dbm_color(self, text: str):
@@ -64,7 +86,7 @@ class DbmAxisItem(pg.AxisItem):
             .lightness()
             < 128
         )
-        return pg.mkColor("#8a96b0" if is_dark else "#445566")
+        return pg.mkColor(GRAPH_AXIS_DARK if is_dark else GRAPH_AXIS_LIGHT)
 
     def drawPicture(self, p, axisSpec, tickSpecs, textSpecs):
         p.save()
@@ -104,7 +126,7 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
         pen, p1, p2 = axisSpec
         base_pen = pen
         if base_pen is None:
-            c = QColor("#8a96b0")
+            c = QColor(GRAPH_AXIS_DARK)
             c.setAlpha(140)
             base_pen = pg.mkPen(c, width=1)
         p.setPen(base_pen)
@@ -118,7 +140,7 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
             dfs_x1 = max(min(v1.x(), v2.x()), x_min)
             dfs_x2 = min(max(v1.x(), v2.x()), x_max)
             if dfs_x2 > dfs_x1:
-                dfs_pen = QColor("#64b5f6")
+                dfs_pen = QColor(DFS_AXIS_COLOR)
                 dfs_pen.setAlpha(255)
                 p.setPen(pg.mkPen(dfs_pen, width=2))
                 p.drawLine(QPointF(dfs_x1, p1.y()), QPointF(dfs_x2, p2.y()))
@@ -127,7 +149,7 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
             p.drawLine(p1, p2)
         if self.style.get("tickFont") is not None:
             p.setFont(self.style["tickFont"])
-        default_pen = self.style.get("pen") or pg.mkPen("#8a96b0")
+        default_pen = self.style.get("pen") or pg.mkPen(GRAPH_AXIS_DARK)
         for rect, flags, text in textSpecs:
             clean_text = text.strip()
             try:
@@ -238,8 +260,8 @@ class ChannelGraphWidget(QWidget):
         self._ssid_colors: Dict[str, QColor] = {}
         self._band = "All"
         self._highlighted: Optional[str] = None
-        self._theme_bg = "#0d1117"
-        self._theme_fg = "#a9b4cc"
+        self._theme_bg = GRAPH_BG_DARK
+        self._theme_fg = GRAPH_FG_DARK
         self._band_channels: Dict[str, Dict[float, int]] = {}  # band → {freq_mhz: chan}
         self._view_ranges: Dict[
             str, Tuple[Tuple[float, float], Tuple[float, float]]
@@ -345,7 +367,7 @@ class ChannelGraphWidget(QWidget):
             dfs_lo = max(5260.0, xmin)
             dfs_hi = min(5720.0, xmax)
             if dfs_hi > dfs_lo:
-                dfs_color = QColor("#a952bd")
+                dfs_color = QColor(DFS_FILL_COLOR)
                 dfs_color.setAlpha(235)
                 dfs_line = pg.PlotCurveItem(
                     [dfs_lo, dfs_hi],
@@ -479,7 +501,7 @@ class ChannelGraphWidget(QWidget):
             tick_src = self._BAND_TICKS[band]
 
             for ap in band_aps:
-                color = self._ssid_colors.get(ap.ssid, QColor("#888888"))
+                color = self._ssid_colors.get(ap.ssid, QColor(FALLBACK_GRAY))
                 # Use the bonded-block center for 5 GHz (not just primary channel)
                 draw_center = get_ap_draw_center(ap)
                 unit = _channel_shape_unit(xs, draw_center, max(ap.bandwidth_mhz, 20))
@@ -591,11 +613,11 @@ class SignalHistoryWidget(QWidget):
         self._splitter.addWidget(self._ssid_list)
 
         self._plot = PlotWidget(axisItems={"left": DbmAxisItem(orientation="left")})
-        self._plot.setBackground("#0d1117")
+        self._plot.setBackground(GRAPH_BG_DARK)
         self._plot.showGrid(x=True, y=True, alpha=0.15)
-        self._plot.setLabel("left", "Signal (dBm)", color="#8a96b0", size="10pt")
-        self._plot.setLabel("bottom", "Time (s ago)", color="#8a96b0", size="10pt")
-        self._plot.getAxis("bottom").setTextPen("#8a96b0")
+        self._plot.setLabel("left", "Signal (dBm)", color=GRAPH_AXIS_DARK, size="10pt")
+        self._plot.setLabel("bottom", "Time (s ago)", color=GRAPH_AXIS_DARK, size="10pt")
+        self._plot.getAxis("bottom").setTextPen(GRAPH_AXIS_DARK)
         self._plot.setMenuEnabled(True)
         self._plot.getViewBox().setMouseEnabled(x=True, y=True)
         self._plot.setYRange(CHAN_DBM_FLOOR, CHAN_DBM_CEIL, padding=0.02)
@@ -665,7 +687,7 @@ class SignalHistoryWidget(QWidget):
             ssid = self._ssid_map.get(bssid, bssid)
             item = QListWidgetItem(f"{ssid} ({bssid[-5:]})")
             item.setToolTip(bssid)
-            color = self._ssid_colors.get(ssid, QColor("#888888"))
+            color = self._ssid_colors.get(ssid, QColor(FALLBACK_GRAY))
             item.setForeground(QBrush(color))
             self._ssid_list.addItem(item)
 
@@ -679,7 +701,7 @@ class SignalHistoryWidget(QWidget):
             ts = -ts  # negative = past
 
             ssid = self._ssid_map.get(bssid, bssid)
-            color = self._ssid_colors.get(ssid, QColor("#888888"))
+            color = self._ssid_colors.get(ssid, QColor(FALLBACK_GRAY))
 
             if bssid not in self._curves:
                 pen = mkPen(color=color, width=2)
@@ -947,13 +969,13 @@ class _ChannelTableWidget(QWidget):
         BG = pal.color(
             QPalette.ColorRole.Base if is_dark else QPalette.ColorRole.Window
         )
-        GRID = QColor("#3a4a5e" if is_dark else "#8a9ab8")
-        CELL_BG = QColor("#18203a" if is_dark else "#edf1fb")
-        LBL_BG = QColor("#232d40" if is_dark else "#d8dfee")
-        TEXT_C = QColor("#dde8f8" if is_dark else "#1a2438")
-        DIM_C = QColor("#6a7e9a" if is_dark else "#5a6a82")
-        WHITE = QColor("#ffffff")
-        BLACK = QColor("#0a0f1a")
+        GRID    = QColor(ALLOC_GRID_DARK    if is_dark else ALLOC_GRID_LIGHT)
+        CELL_BG = QColor(ALLOC_CELL_BG_DARK if is_dark else ALLOC_CELL_BG_LIGHT)
+        LBL_BG  = QColor(ALLOC_LBL_BG_DARK  if is_dark else ALLOC_LBL_BG_LIGHT)
+        TEXT_C  = QColor(ALLOC_TEXT_DARK     if is_dark else ALLOC_TEXT_LIGHT)
+        DIM_C   = QColor(ALLOC_DIM_DARK      if is_dark else ALLOC_DIM_LIGHT)
+        WHITE   = QColor(ALLOC_WHITE)
+        BLACK   = QColor(ALLOC_BLACK)
 
         p.fillRect(self.rect(), BG)
 
@@ -1117,7 +1139,7 @@ class _ChannelTableWidget(QWidget):
                 p.setPen(QPen(WHITE, 1.2))
                 p.drawRect(r)
                 if seg_text:
-                    p.setPen(QColor("#f0f6ff") if is_dark else BLACK)
+                    p.setPen(QColor(ALLOC_ONBAND_DARK) if is_dark else BLACK)
                     p.setFont(fsmb)
                     p.drawText(
                         r.adjusted(4, 2, -4, -2),
@@ -1170,8 +1192,8 @@ class TwoGhzAllocationDiagram(_ChannelTableWidget):
     _PHANTOM_COLS = frozenset({-2, -1, 14, 15})
 
     _UNII_BANDS = [
-        ("2.4 GHz ISM  (ch 1–13, global)", "#1B5E20", _24G_ISM),
-        ("ch 14  (JP only)", "#BF360C", [140]),
+        ("2.4 GHz ISM  (ch 1–13, global)", PLAN_2G_ISM_HEADER, _24G_ISM),
+        ("ch 14  (JP only)", PLAN_2G_JP_HEADER, [140]),
     ]
 
     _BW_ROWS = [
@@ -1196,9 +1218,9 @@ class TwoGhzAllocationDiagram(_ChannelTableWidget):
             "3-ch (1, 6, 11)\nUS/Global",
             36,
             [
-                (-1, 2, "#1B5E20", "1"),
-                (5, 7, "#1565C0", "6"),
-                (10, 12, "#B71C1C", "11"),
+                (-1, 2, PLAN_CH1, "1"),
+                (5, 7, PLAN_CH6, "6"),
+                (10, 12, PLAN_CH11, "11"),
             ],
             False,
         ),
@@ -1212,10 +1234,10 @@ class TwoGhzAllocationDiagram(_ChannelTableWidget):
             "4-ch (1, 5, 9, 13)\nNon-US",
             36,
             [
-                (-1, 2, "#1B5E20", "1"),
-                (4, 6, "#E65100", "5"),
-                (8, 10, "#1565C0", "9"),
-                (12, 14, "#880E4F", "13"),
+                (-1, 2, PLAN_CH1, "1"),
+                (4, 6, PLAN_EU_CH5, "5"),
+                (8, 10, PLAN_CH6, "9"),
+                (12, 14, PLAN_EU_CH13, "13"),
             ],
             False,
         ),
@@ -1227,8 +1249,8 @@ class TwoGhzAllocationDiagram(_ChannelTableWidget):
             "802.11b (22 MHz)\n(ch 5, 10)",
             36,
             [
-                (4, 6, "#4527A0", "5  (22 MHz)"),
-                (9, 11, "#00695C", "10  (22 MHz)"),
+                (4, 6, PLAN_JP_CH5, "5  (22 MHz)"),
+                (9, 11, PLAN_JP_CH10, "10  (22 MHz)"),
             ],
             False,
         ),
@@ -1241,9 +1263,9 @@ class TwoGhzAllocationDiagram(_ChannelTableWidget):
             "802.11g/n/ax(20 MHz)\n(ch 4, 9, 14)(JP)",
             36,
             [
-                (3, 5, "#1B5E20", "4"),
-                (8, 10, "#1565C0", "9"),
-                (140, 140, "#BF360C", "14"),
+                (3, 5, PLAN_CH1, "4"),
+                (8, 10, PLAN_CH6, "9"),
+                (140, 140, PLAN_2G_JP_HEADER, "14"),
             ],
             False,
         ),
@@ -1310,10 +1332,10 @@ class FiveGhzAllocationDiagram(_ChannelTableWidget):
     ]
 
     _UNII_BANDS = [
-        ("UNII-1", "#388E3C", _U1),
-        ("UNII-2A", "#1976D2", _U2A),
-        ("UNII-2C (Ext.)", "#0D47A1", _U2C),
-        ("UNII-3", "#E64A19", _U3),
+        ("UNII-1", ALLOC_5G_U1, _U1),
+        ("UNII-2A", ALLOC_5G_U2A, _U2A),
+        ("UNII-2C (Ext.)", ALLOC_5G_U2C, _U2C),
+        ("UNII-3", ALLOC_5G_U3, _U3),
     ]
 
     _BW_ROWS = [
@@ -1396,22 +1418,22 @@ class FiveGhzAllocationDiagram(_ChannelTableWidget):
                 (
                     36,
                     48,
-                    "#81C784",
+                    ALLOC_5G_36_48,
                     "1,000 mW Tx Power\nIndoor & Outdoor\nNo DFS needed",
                 ),
-                (52, 64, "#64B5F6", "250 mw w/6dBi\nIndoor & Outdoor\nDFS Required"),
+                (52, 64, ALLOC_5G_52_116, "250 mw w/6dBi\nIndoor & Outdoor\nDFS Required"),
                 (
                     100,
                     116,
-                    "#64B5F6",
+                    ALLOC_5G_52_116,
                     "250mw w/6dBi\nIndoor & Outdoor\nDFS Required\n144 Now Allowed",
                 ),
-                (120, 128, "#FFD54F", "120, 124, 128\nDevices Now\nAllowed"),
-                (132, 144, "#5C8BB0", ""),
+                (120, 128, ALLOC_5G_120_128, "120, 124, 128\nDevices Now\nAllowed"),
+                (132, 144, ALLOC_5G_132_144, ""),
                 (
                     149,
                     165,
-                    "#FF8A65",
+                    ALLOC_5G_149_165,
                     "1,000 mW EIRP\nIndoor & Outdoor\nNo DFS needed\n165 was ISM,\nnow UNII-3",
                 ),
             ],
@@ -1420,7 +1442,7 @@ class FiveGhzAllocationDiagram(_ChannelTableWidget):
             "DFS",
             24,
             [
-                (52, 144, "#546E7A", "DFS Channels — ch 52 through 144"),
+                (52, 144, ALLOC_5G_DFS_BAND, "DFS Channels — ch 52 through 144"),
             ],
         ),
     ]
@@ -1465,8 +1487,10 @@ class FiveGhzAllocationDialog(QDialog):
         self._apply_theme(is_dark)
 
     def _apply_theme(self, is_dark: bool):
-        bg, border = ("#0f1622", "#273248") if is_dark else ("#ffffff", "#c7d2e3")
-        tc, nc = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
+        bg = DIALOG_BG_DARK if is_dark else DIALOG_BG_LIGHT
+        border = DIALOG_BORDER_DARK if is_dark else DIALOG_BORDER_LIGHT
+        tc = DIALOG_TEXT_DARK if is_dark else DIALOG_TEXT_LIGHT
+        nc = DIALOG_NOTE_DARK if is_dark else DIALOG_NOTE_LIGHT
         self.setStyleSheet(
             f"QDialog{{background:{bg};border:1px solid {border};border-radius:8px;}}"
             f"QLabel#allocTitle{{color:{tc};font-size:13pt;font-weight:700;}}"
@@ -1500,10 +1524,10 @@ class SixGhzAllocationDiagram(_ChannelTableWidget):
     _COLS = _U5 + [None] + _U6 + [None] + _U7 + [None] + _U8
 
     _UNII_BANDS = [
-        ("UNII-5", "#2E7D32", _U5),
-        ("UNII-6", "#00695C", _U6),
-        ("UNII-7", "#1565C0", _U7),
-        ("UNII-8", "#6A1B9A", _U8),
+        ("UNII-5", ALLOC_6G_U5, _U5),
+        ("UNII-6", ALLOC_6G_U6, _U6),
+        ("UNII-7", ALLOC_6G_U7, _U7),
+        ("UNII-8", ALLOC_6G_U8, _U8),
     ]
 
     _BW_ROWS = [
@@ -1643,8 +1667,10 @@ class SixGhzAllocationDialog(QDialog):
         self._apply_theme(is_dark)
 
     def _apply_theme(self, is_dark: bool):
-        bg, border = ("#0f1622", "#273248") if is_dark else ("#ffffff", "#c7d2e3")
-        tc, nc = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
+        bg = DIALOG_BG_DARK if is_dark else DIALOG_BG_LIGHT
+        border = DIALOG_BORDER_DARK if is_dark else DIALOG_BORDER_LIGHT
+        tc = DIALOG_TEXT_DARK if is_dark else DIALOG_TEXT_LIGHT
+        nc = DIALOG_NOTE_DARK if is_dark else DIALOG_NOTE_LIGHT
         self.setStyleSheet(
             f"QDialog{{background:{bg};border:1px solid {border};border-radius:8px;}}"
             f"QLabel#allocTitle{{color:{tc};font-size:13pt;font-weight:700;}}"
@@ -1713,8 +1739,10 @@ class ChannelAllocationsDialog(QDialog):
         self._apply_theme(is_dark)
 
     def _apply_theme(self, is_dark: bool):
-        bg, border = ("#0f1622", "#273248") if is_dark else ("#ffffff", "#c7d2e3")
-        tc, nc = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
+        bg = DIALOG_BG_DARK if is_dark else DIALOG_BG_LIGHT
+        border = DIALOG_BORDER_DARK if is_dark else DIALOG_BORDER_LIGHT
+        tc = DIALOG_TEXT_DARK if is_dark else DIALOG_TEXT_LIGHT
+        nc = DIALOG_NOTE_DARK if is_dark else DIALOG_NOTE_LIGHT
         self.setStyleSheet(
             f"QDialog{{background:{bg};border:1px solid {border};border-radius:8px;}}"
             f"QLabel#allocTitle{{color:{tc};font-size:13pt;font-weight:700;}}"

@@ -68,7 +68,7 @@ class APTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ForegroundRole:
             # Dim the entire row while an AP is in its linger grace period
             if ap.is_lingering:
-                return QBrush(QColor("#4a5a72"))
+                return QBrush(QColor(TABLE_LINGER_FG))
             if col == COL_SSID:
                 # Color the SSID text with its network colour (replaces tinted rows)
                 c = QColor(self._color_for_ssid(ap.ssid))
@@ -79,7 +79,7 @@ class APTableModel(QAbstractTableModel):
             if col == COL_DBM:
                 return QBrush(signal_color(ap.signal))
             if col == COL_INUSE:
-                return QBrush(QColor("#4caf50")) if ap.in_use else None
+                return QBrush(QColor(SIG_EXCELLENT)) if ap.in_use else None
             if col == COL_GEN:
                 c = IW_GEN_COLORS.get(ap.wifi_gen)
                 return QBrush(QColor(c)) if c else None
@@ -87,18 +87,18 @@ class APTableModel(QAbstractTableModel):
                 pct = ap.chan_util_pct
                 if pct is not None:
                     if pct >= 75:
-                        return QBrush(QColor("#f44336"))
+                        return QBrush(QColor(SIG_POOR))
                     if pct >= 50:
-                        return QBrush(QColor("#ff9800"))
+                        return QBrush(QColor(SIG_WEAK))
                     if pct >= 25:
-                        return QBrush(QColor("#ffc107"))
-                    return QBrush(QColor("#4caf50"))
+                        return QBrush(QColor(SIG_FAIR))
+                    return QBrush(QColor(SIG_EXCELLENT))
             if col == COL_SEC:
                 sec = ap.security_short
                 if sec == "Open" or sec == "":
-                    return QBrush(QColor("#f44336"))
+                    return QBrush(QColor(SIG_POOR))
                 if "WPA3" in sec or "WPA2+WPA3" in sec:
-                    return QBrush(QColor("#4caf50"))
+                    return QBrush(QColor(SIG_EXCELLENT))
             return None
 
         if role == Qt.ItemDataRole.BackgroundRole:

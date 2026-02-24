@@ -570,7 +570,7 @@ class OuiDownloadDialog(QDialog):
         layout.addWidget(header)
 
         self._status = QLabel("Ready.")
-        self._status.setStyleSheet("color:#8a96b0; font-size:9pt;")
+        self._status.setStyleSheet(f"color:{VENDOR_MUTED}; font-size:9pt;")
         layout.addWidget(self._status)
 
         self._progress = QProgressBar()
@@ -604,11 +604,11 @@ class OuiDownloadDialog(QDialog):
         self._progress.hide()
         if ok:
             self._status.setText(f"✓  {msg}")
-            self._status.setStyleSheet("color:#4caf50; font-size:9pt;")
+            self._status.setStyleSheet(f"color:{VENDOR_SUCCESS}; font-size:9pt;")
             self._btn_skip.setText("Close")
         else:
             self._status.setText(f"✗  {msg}")
-            self._status.setStyleSheet("color:#ef5350; font-size:9pt;")
+            self._status.setStyleSheet(f"color:{VENDOR_ERROR}; font-size:9pt;")
             self._btn_download.setEnabled(True)
         self._btn_skip.setEnabled(True)
 
