@@ -6,6 +6,7 @@ Contains table headers/columns plus Qt table and filter proxy models.
 from .core_scanner import *
 from .theme import IW_GEN_COLORS
 
+
 class APTableModel(QAbstractTableModel):
     def __init__(self):
         super().__init__()
@@ -323,5 +324,3 @@ class APFilterProxy(QSortFilterProxyModel):
 # dBm display constants for the channel graph
 CHAN_DBM_FLOOR = -100  # baseline (bottom of every shape)
 CHAN_DBM_CEIL = -20  # top of y-axis (you never see > -20 in practice)
-
-

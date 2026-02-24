@@ -40,11 +40,21 @@ def _parse_rate(rate_str: str) -> float:
 # HE/EHT per-stream throughput in Mbps, 0.8 μs GI (IEEE 802.11ax Table 27-52)
 # Keyed by (channel_width_MHz, mcs_index — rounded to 7/9/11 bracket)
 _HE_RATE_1SS: Dict[Tuple[int, int], float] = {
-    (20,   7):   86.0, (20,   9):  114.7, (20,  11):  143.4,
-    (40,   7):  172.0, (40,   9):  229.4, (40,  11):  286.8,
-    (80,   7):  360.3, (80,   9):  480.4, (80,  11):  600.4,
-    (160,  7):  720.6, (160,  9):  960.8, (160, 11): 1201.0,
-    (320,  7): 1441.2, (320,  9): 1921.6, (320, 11): 2402.0,
+    (20, 7): 86.0,
+    (20, 9): 114.7,
+    (20, 11): 143.4,
+    (40, 7): 172.0,
+    (40, 9): 229.4,
+    (40, 11): 286.8,
+    (80, 7): 360.3,
+    (80, 9): 480.4,
+    (80, 11): 600.4,
+    (160, 7): 720.6,
+    (160, 9): 960.8,
+    (160, 11): 1201.0,
+    (320, 7): 1441.2,
+    (320, 9): 1921.6,
+    (320, 11): 2402.0,
 }
 
 
@@ -394,14 +404,17 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         # VHT operation (5 GHz): "* channel width: N" (numeric code 0-3)
         oper_bw_m = re.search(
             r"\*\s*channel\s+width\s*:\s*(?:\d+\s+\()?(\d+)\s*MHz",
-            text, re.IGNORECASE,
+            text,
+            re.IGNORECASE,
         )
         if oper_bw_m:
             cw = int(oper_bw_m.group(1))
             if cw in (20, 40, 80, 160, 320):
                 d["iw_oper_bw"] = cw
         if "iw_oper_bw" not in d and re.search(r"VHT\s+operation", text, re.IGNORECASE):
-            vht_code_m = re.search(r"\*\s*channel\s+width:\s*(\d+)", text, re.IGNORECASE)
+            vht_code_m = re.search(
+                r"\*\s*channel\s+width:\s*(\d+)", text, re.IGNORECASE
+            )
             if vht_code_m:
                 _vht_bw = {0: 40, 1: 80, 2: 160, 3: 160}
                 code = int(vht_code_m.group(1))
@@ -485,7 +498,9 @@ def _parse_bitrate_phy(raw: str) -> str:
     return " · ".join(parts)
 
 
-def _parse_iw_survey_dump(output: str, target_freq_mhz: Optional[int]) -> Dict[str, object]:
+def _parse_iw_survey_dump(
+    output: str, target_freq_mhz: Optional[int]
+) -> Dict[str, object]:
     blocks = re.split(r"(?m)^Survey\s+data\s+from", output)
     chosen: Optional[str] = None
     for block in blocks[1:]:
@@ -694,9 +709,7 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 nss = d.get("iw_max_nss", 0)
                 mcs = d.get("iw_max_mcs", 11)
                 if nss > 0:
-                    ap.rate_mbps = float(
-                        _he_rate_mbps(ap.bandwidth_mhz, nss, mcs)
-                    )
+                    ap.rate_mbps = float(_he_rate_mbps(ap.bandwidth_mhz, nss, mcs))
             if conn_bssid and ap.bssid.lower() == conn_bssid:
                 for attr in (
                     "conn_iface",
@@ -771,7 +784,7 @@ class WiFiScanner(QThread):
     # keeping data fresh while staying within the rate limit.
     _RESCAN_EVERY = 5
 
-    def __init__(self, interval_sec: int = 2, linger_secs: float = 30.0):
+    def __init__(self, interval_sec: int = 2, linger_secs: float = 120.0):
         super().__init__()
         self._interval = interval_sec
         self._linger_secs = linger_secs
@@ -798,31 +811,58 @@ class WiFiScanner(QThread):
             # This matches observed NM behaviour: back-to-back --rescan yes
             # finds hidden APs that a single call misses.
             # On non-rescan cycles --rescan no returns cached data instantly.
-            do_rescan = (_cycle % self._RESCAN_EVERY == 0 or _cycle == 2)
+            do_rescan = _cycle % self._RESCAN_EVERY == 0 or _cycle == 2
             cmd_timeout = 30 if do_rescan else 8
 
             try:
                 if do_rescan:
                     # First sweep — triggers probe requests on all channels
                     subprocess.run(
-                        ["nmcli", "-t", "-f", NMCLI_FIELDS, "dev", "wifi",
-                         "list", "--rescan", "yes"],
+                        [
+                            "nmcli",
+                            "-t",
+                            "-f",
+                            NMCLI_FIELDS,
+                            "dev",
+                            "wifi",
+                            "list",
+                            "--rescan",
+                            "yes",
+                        ],
                         capture_output=True,
                         text=True,
                         timeout=cmd_timeout,
                     )
                     # Second sweep — picks up probe responses from hidden APs
                     result = subprocess.run(
-                        ["nmcli", "-t", "-f", NMCLI_FIELDS, "dev", "wifi",
-                         "list", "--rescan", "yes"],
+                        [
+                            "nmcli",
+                            "-t",
+                            "-f",
+                            NMCLI_FIELDS,
+                            "dev",
+                            "wifi",
+                            "list",
+                            "--rescan",
+                            "yes",
+                        ],
                         capture_output=True,
                         text=True,
                         timeout=cmd_timeout,
                     )
                 else:
                     result = subprocess.run(
-                        ["nmcli", "-t", "-f", NMCLI_FIELDS, "dev", "wifi",
-                         "list", "--rescan", "no"],
+                        [
+                            "nmcli",
+                            "-t",
+                            "-f",
+                            NMCLI_FIELDS,
+                            "dev",
+                            "wifi",
+                            "list",
+                            "--rescan",
+                            "no",
+                        ],
                         capture_output=True,
                         text=True,
                         timeout=cmd_timeout,
@@ -920,4 +960,3 @@ COL_GEN = 15  # WiFi generation (WiFi 4/5/6/6E/7)
 COL_UTIL = 16  # Channel utilisation %  (BSS Load)
 COL_CLIENTS = 17  # Station count          (BSS Load)
 COL_KVR = 18  # 802.11k/v/r roaming flags
-

@@ -5,6 +5,7 @@ and OUI download dialog/thread components.
 """
 
 from .core_base import *
+
 # ─────────────────────────────────────────────────────────────────────────────
 # OUI / Manufacturer Lookup
 # ─────────────────────────────────────────────────────────────────────────────
@@ -50,7 +51,9 @@ def format_manufacturer_display(vendor: str) -> str:
     """Display-only manufacturer cleanup; never modifies DB values."""
 
     def _prettify_word(word: str) -> str:
-        m = re.match(r"^([^A-Za-z0-9]*)([A-Za-z0-9][A-Za-z0-9'&\-/\.]*)([^A-Za-z0-9]*)$", word)
+        m = re.match(
+            r"^([^A-Za-z0-9]*)([A-Za-z0-9][A-Za-z0-9'&\-/\.]*)([^A-Za-z0-9]*)$", word
+        )
         if not m:
             return word
         prefix, core, suffix = m.groups()

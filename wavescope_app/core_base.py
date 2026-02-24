@@ -3,6 +3,7 @@
 Contains imports, constants, channel math, color helpers,
 and low-level utility functions used across the application.
 """
+
 """Core domain and data layer.
 
 Contains constants, channel math, vendor/OUI resolution, AP model,
@@ -402,5 +403,3 @@ def signal_color(signal: int) -> QColor:
 def signal_to_dbm(signal: int) -> int:
     """Approximate dBm from nmcli 0-100 SIGNAL."""
     return int((signal / 2) - 100)
-
-

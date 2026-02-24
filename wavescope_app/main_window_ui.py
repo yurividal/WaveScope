@@ -15,7 +15,6 @@ class MainWindowUIMixin:
         tb.setIconSize(pg.QtCore.QSize(16, 16))
         self.addToolBar(tb)
 
-        # Band filter
         tb.addWidget(QLabel("  Band: "))
         self._band_combo = QComboBox()
         self._band_combo.addItems(["All", "2.4 GHz", "5 GHz", "6 GHz"])
@@ -49,8 +48,8 @@ class MainWindowUIMixin:
         # Linger duration
         tb.addWidget(QLabel("  Linger: "))
         self._linger_spin = QSpinBox()
-        self._linger_spin.setRange(0, 300)
-        self._linger_spin.setValue(60)
+        self._linger_spin.setRange(0, 600)
+        self._linger_spin.setValue(120)
         self._linger_spin.setSuffix(" s")
         self._linger_spin.setMinimumWidth(65)
         self._linger_spin.setToolTip(
@@ -65,6 +64,12 @@ class MainWindowUIMixin:
         # Pause / resume
         self._btn_pause = QPushButton("⏸ Pause")
         self._btn_pause.setCheckable(True)
+        self._btn_pause.setStyleSheet(
+            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            " border-radius:3px; padding:2px 8px; }"
+            "QPushButton:hover { background:#1a2a40; }"
+            "QPushButton:checked { color:#f9a825; border-color:#7a5a00; background:#2a2010; }"
+        )
         self._btn_pause.toggled.connect(self._on_pause)
         tb.addWidget(self._btn_pause)
 
@@ -73,6 +78,11 @@ class MainWindowUIMixin:
         # OUI database button
         self._btn_oui = QPushButton("📖 Update OUI DB")
         self._btn_oui.setToolTip("Download / refresh the IEEE manufacturer database")
+        self._btn_oui.setStyleSheet(
+            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            " border-radius:3px; padding:2px 8px; }"
+            "QPushButton:hover { background:#1a2a40; }"
+        )
         self._btn_oui.clicked.connect(self._on_update_oui)
         tb.addWidget(self._btn_oui)
 
@@ -91,16 +101,6 @@ class MainWindowUIMixin:
         )
         self._btn_monitor.clicked.connect(self._on_monitor_mode)
         tb.addWidget(self._btn_monitor)
-
-        tb.addSeparator()
-
-        # Channel allocations reference (5 GHz + 6 GHz combined)
-        self._btn_allocations = QPushButton("\U0001f5fa\ufe0f  Channel Allocations")
-        self._btn_allocations.setToolTip(
-            "Open 5 GHz & 6 GHz channel-allocation reference charts"
-        )
-        self._btn_allocations.clicked.connect(self._on_open_allocations)
-        tb.addWidget(self._btn_allocations)
 
         tb.addSeparator()
 
@@ -126,25 +126,10 @@ class MainWindowUIMixin:
         self._btn_clear_filters.hide()
         tb.addWidget(self._btn_clear_filters)
 
-        # Spacer
+        # Spacer — pushes filter badge to the left
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         tb.addWidget(spacer)
-
-        # Last updated
-        self._lbl_updated = QLabel("  Last scan: —  ")
-        tb.addWidget(self._lbl_updated)
-
-        tb.addSeparator()
-
-        # Theme
-        tb.addWidget(QLabel("  Theme: "))
-        self._theme_combo = QComboBox()
-        self._theme_combo.addItems(["🌙 Dark", "☀ Light", "🖥 Auto"])
-        self._theme_combo.setMinimumWidth(90)
-        self._theme_combo.currentIndexChanged.connect(self._on_theme_change)
-        tb.addWidget(self._theme_combo)
-        tb.addWidget(QLabel("  "))
 
         # ── Central widget ─────────────────────────────────────────────────
         central = QWidget()
@@ -208,6 +193,37 @@ class MainWindowUIMixin:
         self._user_sized_cols: set = set()
         hdr.sectionResized.connect(self._on_col_resized)
         splitter.addWidget(self._table)
+
+        # ── First-scan overlay ─────────────────────────────────────────────
+        # Shown while the table is empty (initial scan not yet complete).
+        # Hidden permanently once the first _on_data() fires.
+        self._scan_overlay = QFrame(self._table)
+        self._scan_overlay.setStyleSheet(
+            "QFrame { background-color: rgba(10,15,30,210); border-radius: 0px; }"
+        )
+        _ov_layout = QVBoxLayout(self._scan_overlay)
+        _ov_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _ov_layout.setSpacing(14)
+        _ov_icon = QLabel("📡")
+        _ov_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _ov_icon.setStyleSheet("font-size:52px; background:transparent; border:none;")
+        _ov_layout.addWidget(_ov_icon)
+        self._scan_overlay_lbl = QLabel("Scanning for networks…")
+        self._scan_overlay_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._scan_overlay_lbl.setStyleSheet(
+            "color:#9bbfe0; font-size:18px; font-weight:600;"
+            "background:transparent; border:none;"
+        )
+        _ov_layout.addWidget(self._scan_overlay_lbl)
+        _ov_sub = QLabel("First scan runs a full sweep — this may take a few seconds.")
+        _ov_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        _ov_sub.setStyleSheet(
+            "color:#506070; font-size:11px; background:transparent; border:none;"
+        )
+        _ov_layout.addWidget(_ov_sub)
+        self._scan_overlay.setGeometry(self._table.rect())
+        self._scan_overlay.raise_()
+        self._table.installEventFilter(self)
 
         # ── Graph tabs ─────────────────────────────────────────────────────
         self._tabs = QTabWidget()
@@ -580,4 +596,44 @@ class MainWindowUIMixin:
         splitter.setSizes([380, 350])
 
         # ── Status bar ─────────────────────────────────────────────────────
-        self.statusBar().showMessage("Starting scanner…")
+        # Left: transient messages via showMessage()
+        # Right (permanent): Channel Allocations button, last scan time, theme
+        sb = self.statusBar()
+
+        # Channel allocations button in the status bar
+        self._btn_allocations = QPushButton("🗺\ufe0f  Channel Allocations")
+        self._btn_allocations.setToolTip(
+            "Open 5 GHz & 6 GHz channel-allocation reference charts"
+        )
+        self._btn_allocations.setStyleSheet(
+            "QPushButton { color:#7eb8f7; border:1px solid #2a4a70;"
+            " border-radius:3px; padding:1px 6px; font-size:9pt; }"
+            "QPushButton:hover { background:#1a2a40; }"
+        )
+        self._btn_allocations.clicked.connect(self._on_open_allocations)
+        sb.addPermanentWidget(self._btn_allocations)
+
+        sb.addPermanentWidget(QLabel("   "))
+
+        _sep2 = QFrame()
+        _sep2.setFrameShape(QFrame.Shape.VLine)
+        _sep2.setFrameShadow(QFrame.Shadow.Sunken)
+        sb.addPermanentWidget(_sep2)
+
+        self._lbl_updated = QLabel("  Last scan: —  ")
+        sb.addPermanentWidget(self._lbl_updated)
+
+        _sep3 = QFrame()
+        _sep3.setFrameShape(QFrame.Shape.VLine)
+        _sep3.setFrameShadow(QFrame.Shadow.Sunken)
+        sb.addPermanentWidget(_sep3)
+
+        sb.addPermanentWidget(QLabel("  Theme: "))
+        self._theme_combo = QComboBox()
+        self._theme_combo.addItems(["🌙 Dark", "☀ Light", "🖥 Auto"])
+        self._theme_combo.setMinimumWidth(90)
+        self._theme_combo.currentIndexChanged.connect(self._on_theme_change)
+        sb.addPermanentWidget(self._theme_combo)
+        sb.addPermanentWidget(QLabel("  "))
+
+        sb.showMessage("Starting scanner…")

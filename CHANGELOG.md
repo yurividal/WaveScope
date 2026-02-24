@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.8.0 — 2026-02-24
+
+### Highlights
+- **2.4 GHz channel allocation graph** — redesigned with accurate ±1.5-channel RF spans, frequency-based positioning, and correct non-overlapping channel plan rows.
+- **Hidden network fix** — double rescan on startup ensures hidden SSIDs appear on the first result instead of after 30–45 s.
+- **UI improvements** — uniform toolbar button styles; first-scan overlay while the table is empty; Channel Allocations button moved to the status bar.
+
 ## v1.7.0 — 2026-02-24
 
 ### Highlights

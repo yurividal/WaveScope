@@ -153,10 +153,10 @@ class MainWindowLogicMixin:
     # Fields where 0 / "" / None means "parse failed" — once we get a real
     # value the last-good value is kept even if subsequent cycles return 0.
     _STICKY_NONZERO_FIELDS = (
-        "bandwidth_mhz",   # nmcli returns 0 for 6 GHz
-        "rate_mbps",       # nmcli returns 0 for 6 GHz
-        "wifi_gen",        # may be "" when iw scan cache is stale
-        "country",         # Country IE sometimes absent on one cycle
+        "bandwidth_mhz",  # nmcli returns 0 for 6 GHz
+        "rate_mbps",  # nmcli returns 0 for 6 GHz
+        "wifi_gen",  # may be "" when iw scan cache is stale
+        "country",  # Country IE sometimes absent on one cycle
         "iw_center_freq",  # may be None when iw misses the center-freq line
     )
 
@@ -263,9 +263,9 @@ class MainWindowLogicMixin:
             cache = self._sticky_cache.setdefault(key, {})
             for field in self._STICKY_NONZERO_FIELDS:
                 val = getattr(ap, field)
-                if val:                    # nonzero / non-empty / non-None → update
+                if val:  # nonzero / non-empty / non-None → update
                     cache[field] = val
-                elif field in cache:       # zero/empty but we have a good value
+                elif field in cache:  # zero/empty but we have a good value
                     setattr(ap, field, cache[field])
 
         # ── iw-field persistence ─────────────────────────────────────────────
@@ -298,7 +298,9 @@ class MainWindowLogicMixin:
                 and ap.conn_tx_failed is not None
             ):
                 d_pkts = ap.conn_tx_packets - prev.get("tx_packets", ap.conn_tx_packets)
-                d_retry = ap.conn_tx_retries - prev.get("tx_retries", ap.conn_tx_retries)
+                d_retry = ap.conn_tx_retries - prev.get(
+                    "tx_retries", ap.conn_tx_retries
+                )
                 d_fail = ap.conn_tx_failed - prev.get("tx_failed", ap.conn_tx_failed)
                 if d_pkts > 0 and d_retry >= 0 and d_fail >= 0:
                     ap.conn_tx_retry_rate_pct = (d_retry / d_pkts) * 100.0
@@ -338,6 +340,9 @@ class MainWindowLogicMixin:
         self._lbl_updated.setText(f"  Last scan: {ts}  ")
         self.statusBar().showMessage(f"Found {total} access points  |  Showing {shown}")
         self._show_connection()
+        # Hide the first-scan overlay once data arrives for the first time
+        if hasattr(self, "_scan_overlay") and self._scan_overlay.isVisible():
+            self._scan_overlay.hide()
 
     def _on_theme_change(self, idx: int):
         modes = ["dark", "light", "auto"]
@@ -671,7 +676,7 @@ class MainWindowLogicMixin:
         in_use = (
             (
                 ' &nbsp;<span style="font-size:13px;font-weight:600;color:#2e7d32;">'
-                '▲ CONNECTED</span>'
+                "▲ CONNECTED</span>"
             )
             if ap.in_use
             else ""
@@ -968,7 +973,11 @@ class MainWindowLogicMixin:
             connected_ap = next((x for x in self._aps if x.in_use), None)
         if connected_ap is None:
             connected_ap = next(
-                (x for x in self._aps if x.conn_iface or x.conn_link_freq_mhz is not None),
+                (
+                    x
+                    for x in self._aps
+                    if x.conn_iface or x.conn_link_freq_mhz is not None
+                ),
                 None,
             )
         v = self._conn_vals
@@ -1060,16 +1069,24 @@ class MainWindowLogicMixin:
         v["tx_bitrate"].setText(ap.conn_tx_bitrate or dim("Not reported"))
         v["expected_tp"].setText(ap.conn_expected_tp or dim("Not reported"))
         v["rx_packets"].setText(
-            str(ap.conn_rx_packets) if ap.conn_rx_packets is not None else dim("Not reported")
+            str(ap.conn_rx_packets)
+            if ap.conn_rx_packets is not None
+            else dim("Not reported")
         )
         v["tx_packets"].setText(
-            str(ap.conn_tx_packets) if ap.conn_tx_packets is not None else dim("Not reported")
+            str(ap.conn_tx_packets)
+            if ap.conn_tx_packets is not None
+            else dim("Not reported")
         )
         v["rx_bytes"].setText(
-            str(ap.conn_rx_bytes) if ap.conn_rx_bytes is not None else dim("Not reported")
+            str(ap.conn_rx_bytes)
+            if ap.conn_rx_bytes is not None
+            else dim("Not reported")
         )
         v["tx_bytes"].setText(
-            str(ap.conn_tx_bytes) if ap.conn_tx_bytes is not None else dim("Not reported")
+            str(ap.conn_tx_bytes)
+            if ap.conn_tx_bytes is not None
+            else dim("Not reported")
         )
         v["rx_drop_misc"].setText(
             str(ap.conn_rx_drop_misc)
@@ -1114,6 +1131,14 @@ class MainWindowLogicMixin:
             v["connected_time"].setText(dim("Not reported"))
 
     def eventFilter(self, obj, event):
+        # Keep the first-scan overlay filling the table when it is resized
+        if (
+            hasattr(self, "_scan_overlay")
+            and obj is self._table
+            and event.type() == QEvent.Type.Resize
+            and self._scan_overlay.isVisible()
+        ):
+            self._scan_overlay.setGeometry(self._table.rect())
         if (
             hasattr(self, "_manufacturer_tip_widgets")
             and obj in self._manufacturer_tip_widgets

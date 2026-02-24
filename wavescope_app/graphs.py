@@ -756,24 +756,27 @@ class _ChannelTableWidget(QWidget):
         _ch_freq(ch) -> int
     """
 
-    _ZOOM_MIN   = 0.25
-    _ZOOM_MAX   = 4.0
-    _ZOOM_STEP  = 1.15
+    _ZOOM_MIN = 0.25
+    _ZOOM_MAX = 4.0
+    _ZOOM_STEP = 1.15
 
-    _TITLE      = ""
-    _SUBTITLE   = ""
+    _TITLE = ""
+    _SUBTITLE = ""
     _COLS: List = []
     _UNII_BANDS: List = []
-    _BW_ROWS: List    = []
+    _BW_ROWS: List = []
     _EXTRA_ROWS: List = []
+    # Channels in this set exist in _COLS for geometry purposes but are
+    # rendered as invisible overflow slots (no label, no band colour).
+    _PHANTOM_COLS: frozenset = frozenset()
 
     # Base dimensions at zoom = 1 (px)
     _BASE_LEFT_W = 132.0
-    _BASE_COL_W  = 28.0
-    _BASE_GAP_W  = 12.0
+    _BASE_COL_W = 28.0
+    _BASE_GAP_W = 12.0
     _BASE_BAND_H = 28.0
     _BASE_FREQ_H = 54.0
-    _BASE_BW_H   = 28.0
+    _BASE_BW_H = 28.0
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -816,17 +819,17 @@ class _ChannelTableWidget(QWidget):
         return v * self._zoom
 
     def _content_size(self) -> Tuple[int, int]:
-        z   = self._zoom
-        cw  = self._BASE_COL_W  * z
-        gw  = self._BASE_GAP_W  * z
-        lw  = self._BASE_LEFT_W * z
+        z = self._zoom
+        cw = self._BASE_COL_W * z
+        gw = self._BASE_GAP_W * z
+        lw = self._BASE_LEFT_W * z
         tcw = sum(gw if c is None else cw for c in self._COLS)
         H = int(
             self._z(38)
             + self._z(self._BASE_BAND_H)
             + self._z(self._BASE_FREQ_H)
             + len(self._BW_ROWS) * self._z(self._BASE_BW_H)
-            + sum(self._z(rh) for _, rh, _ in self._EXTRA_ROWS)
+            + sum(self._z(row[1]) for row in self._EXTRA_ROWS)
             + 4
         )
         return int(lw + tcw + 2), H
@@ -938,33 +941,42 @@ class _ChannelTableWidget(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
-        pal     = self.palette()
+        pal = self.palette()
         is_dark = pal.color(QPalette.ColorRole.Window).lightness() < 128
 
-        BG       = pal.color(QPalette.ColorRole.Base if is_dark else QPalette.ColorRole.Window)
-        GRID     = QColor("#3a4a5e" if is_dark else "#8a9ab8")
-        CELL_BG  = QColor("#18203a" if is_dark else "#edf1fb")
-        LBL_BG   = QColor("#232d40" if is_dark else "#d8dfee")
-        TEXT_C   = QColor("#dde8f8" if is_dark else "#1a2438")
-        DIM_C    = QColor("#6a7e9a" if is_dark else "#5a6a82")
-        WHITE    = QColor("#ffffff")
-        BLACK    = QColor("#0a0f1a")
+        BG = pal.color(
+            QPalette.ColorRole.Base if is_dark else QPalette.ColorRole.Window
+        )
+        GRID = QColor("#3a4a5e" if is_dark else "#8a9ab8")
+        CELL_BG = QColor("#18203a" if is_dark else "#edf1fb")
+        LBL_BG = QColor("#232d40" if is_dark else "#d8dfee")
+        TEXT_C = QColor("#dde8f8" if is_dark else "#1a2438")
+        DIM_C = QColor("#6a7e9a" if is_dark else "#5a6a82")
+        WHITE = QColor("#ffffff")
+        BLACK = QColor("#0a0f1a")
 
         p.fillRect(self.rect(), BG)
 
         # fonts
-        F        = self.font()
-        fbold    = QFont(F);   fbold.setBold(True)
-        fsmall   = QFont(F);   fsmall.setPointSize(max(6, F.pointSize() - 1))
-        fsmb     = QFont(fsmall); fsmb.setBold(True)
-        ftiny    = QFont(F);   ftiny.setPointSize(max(5, F.pointSize() - 2))
-        ftinyb   = QFont(ftiny);  ftinyb.setBold(True)
-        ftitle   = QFont(F);   ftitle.setPointSize(F.pointSize() + 1); ftitle.setBold(True)
+        F = self.font()
+        fbold = QFont(F)
+        fbold.setBold(True)
+        fsmall = QFont(F)
+        fsmall.setPointSize(max(6, F.pointSize() - 1))
+        fsmb = QFont(fsmall)
+        fsmb.setBold(True)
+        ftiny = QFont(F)
+        ftiny.setPointSize(max(5, F.pointSize() - 2))
+        ftinyb = QFont(ftiny)
+        ftinyb.setBold(True)
+        ftitle = QFont(F)
+        ftitle.setPointSize(F.pointSize() + 1)
+        ftitle.setBold(True)
 
-        lw       = self._z(self._BASE_LEFT_W)
-        band_h   = self._z(self._BASE_BAND_H)
-        freq_h   = self._z(self._BASE_FREQ_H)
-        bw_h     = self._z(self._BASE_BW_H)
+        lw = self._z(self._BASE_LEFT_W)
+        band_h = self._z(self._BASE_BAND_H)
+        freq_h = self._z(self._BASE_FREQ_H)
+        bw_h = self._z(self._BASE_BW_H)
 
         xs_nat, ws_nat, nat_cw = self._col_xs()
         # Stretch columns horizontally to fill the widget's actual width.
@@ -979,12 +991,13 @@ class _ChannelTableWidget(QWidget):
         else:
             xs, ws = xs_nat, ws_nat
         total_cw = avail_cw
-        CX = lw   # x where chart columns begin
+        CX = lw  # x where chart columns begin
 
         # ── Title strip ────────────────────────────────────────────────────
         title_h = self._z(38)
         p.fillRect(QRectF(0, 0, lw + total_cw, title_h), LBL_BG)
-        p.setPen(TEXT_C); p.setFont(ftitle)
+        p.setPen(TEXT_C)
+        p.setFont(ftitle)
         p.drawText(
             QRectF(10, 0, lw + total_cw - 20, title_h),
             Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -1006,7 +1019,7 @@ class _ChannelTableWidget(QWidget):
             p.fillRect(r, LBL_BG)
             p.setPen(QPen(GRID, 0.8))
             p.drawRect(r)
-            p.setPen(TEXT_C if bold else DIM_C)
+            p.setPen(TEXT_C)  # always readable, bold rows just get bigger font
             p.setFont(fbold if bold else fsmall)
             p.drawText(
                 r.adjusted(8, 2, -4, -2),
@@ -1033,7 +1046,11 @@ class _ChannelTableWidget(QWidget):
             p.drawRect(r)
             p.setPen(WHITE)
             p.setFont(fbold)
-            p.drawText(r, Qt.AlignmentFlag.AlignCenter, band_lbl)
+            p.drawText(
+                r,
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextDontClip,
+                band_lbl,
+            )
         y += band_h
 
         # ── Center-frequency row (vertical text per 20 MHz column) ────────
@@ -1042,11 +1059,11 @@ class _ChannelTableWidget(QWidget):
         p.setPen(QPen(GRID, 0.5))
         p.drawRect(QRectF(CX, y, total_cw, freq_h))
         for i, ch in enumerate(self._COLS):
-            if ch is None:
+            if ch is None or ch in self._PHANTOM_COLS:
                 continue
-            fv   = self._ch_freq(ch)
+            fv = self._ch_freq(ch)
             cx_c = CX + xs[i] + ws[i] / 2.0
-            hx   = self._ch_band_hex(ch)
+            hx = self._ch_band_hex(ch)
             tc_f = self._vivid(hx) if hx else DIM_C
             # subtle tick at bottom
             p.setPen(QPen(QColor(tc_f.red(), tc_f.green(), tc_f.blue(), 80), 0.8))
@@ -1062,7 +1079,7 @@ class _ChannelTableWidget(QWidget):
             for grp_lbl, chans in groups:
                 if not chans:
                     continue
-                hx   = self._ch_band_hex(chans[0])
+                hx = self._ch_band_hex(chans[0])
                 fill = self._cell_fill(hx) if hx else CELL_BG
                 rect = self._group_rect(chans, xs, ws, y, bw_h, pad=1.5)
                 if rect is None:
@@ -1075,18 +1092,24 @@ class _ChannelTableWidget(QWidget):
             y += bw_h
 
         # ── Extra rows (FCC, DFS, notes) ───────────────────────────────────
-        for row_lbl, row_h_base, segments in self._EXTRA_ROWS:
+        # Each _EXTRA_ROWS entry is (label, height, segments[, bold=True]).
+        # A 4th bool element lets subclasses opt out of bold for short rows.
+        for row_entry in self._EXTRA_ROWS:
+            row_lbl, row_h_base, segments = row_entry[0], row_entry[1], row_entry[2]
+            row_bold = row_entry[3] if len(row_entry) > 3 else True
             rh = self._z(row_h_base)
-            _lbl(y, rh, row_lbl, bold=True)
+            _lbl(y, rh, row_lbl, bold=row_bold)
             p.fillRect(QRectF(CX, y, total_cw, rh), CELL_BG)
             for ch_s, ch_e, seg_hex, seg_text in segments:
                 i0 = self._ch_idx.get(ch_s)
                 i1 = self._ch_idx.get(ch_e)
                 if i0 is None or i1 is None:
                     continue
-                x0 = CX + xs[i0] + 1
-                x1 = CX + xs[i1] + ws[i1] - 1
-                r  = QRectF(x0, y + 1, x1 - x0, rh - 2)
+                # Extend each bar by half a column on each side so that
+                # bar edges land on column centres (±1.5-channel visual span).
+                x0 = CX + xs[i0] - ws[i0] / 2 + 1
+                x1 = CX + xs[i1] + ws[i1] + ws[i1] / 2 - 1
+                r = QRectF(x0, y + 1, x1 - x0, rh - 2)
                 sf = QColor(seg_hex)
                 if is_dark:
                     sf = sf.darker(150)
@@ -1097,10 +1120,8 @@ class _ChannelTableWidget(QWidget):
                     p.setPen(QColor("#f0f6ff") if is_dark else BLACK)
                     p.setFont(fsmb)
                     p.drawText(
-                        r.adjusted(6, 4, -6, -4),
-                        Qt.AlignmentFlag.AlignLeft
-                        | Qt.AlignmentFlag.AlignTop
-                        | Qt.TextFlag.TextWordWrap,
+                        r.adjusted(4, 2, -4, -2),
+                        Qt.AlignmentFlag.AlignCenter,
                         seg_text,
                     )
             p.setPen(QPen(GRID, 0.8))
@@ -1117,43 +1138,125 @@ class _ChannelTableWidget(QWidget):
 # 2.4 GHz channel allocation table
 # ─────────────────────────────────────────────────────────────────────────────
 
-_24G_ISM  = list(range(1, 14))   # ch 1..13 — universally permitted
-_24G_JP   = [14]                  # ch 14  — Japan only (wider gap, 802.11b only)
+_24G_ISM = list(range(1, 14))  # ch 1..13 — universally permitted
+_24G_JP = [14]  # ch 14  — Japan only (wider gap, 802.11b only)
+
+
+# Japan ch 14 uses internal key 140 to avoid collision with the sequential
+# slot-14 phantom column (2477 MHz) needed for ch-13 right-edge overflow.
+_24G_JP_KEY = 140
 
 
 class TwoGhzAllocationDiagram(_ChannelTableWidget):
-    """Table-style 2.4 GHz channel allocation chart."""
+    """Table-style 2.4 GHz channel allocation chart.
 
-    _TITLE    = "2.4 GHz Channel Allocations"
-    _SUBTITLE = "Ctrl+scroll to zoom  ·  Non-overlapping 20 MHz: 1, 6, 11 (US)  ·  1, 5, 9, 13 (EU)"
+    Column grid: each real channel N has centre frequency 2407+N×5 MHz,
+    so adjacent columns are 5 MHz apart.  Plan bars use 3 column-slots
+    (±1.5 slots from centre) matching the user-visible overlap footprint.
+    Columns -2, -1, 14, 15 are phantom (invisible overflow slots) so
+    channels 1 and 13 can show their full bar without edge clipping.
+    Japan's ch 14 (2484 MHz) is stored as key 140 to avoid conflict with
+    sequential slot 14 (2477 MHz).
+    """
 
-    # Channels 1–13 then a visual gap then 14 (Japan-only)
-    _COLS = list(range(1, 14)) + [None] + [14]
+    _TITLE = "2.4 GHz Channel Allocations"
+    _SUBTITLE = "Ctrl+scroll to zoom  ·  scroll to pan"
+
+    # Columns: phantom overflow (-2,-1), real ISM (1-13), sequential
+    # overflow phantoms (14,15), spectral gap, Japan ch-14 (key=140).
+    _COLS = [-2, -1] + list(range(1, 16)) + [None, 140]
+
+    # Phantom cols exist only for geometry; no label/colour is drawn.
+    _PHANTOM_COLS = frozenset({-2, -1, 14, 15})
 
     _UNII_BANDS = [
-        ("2.4 GHz ISM  (ch 1–13, global)",  "#1B5E20", _24G_ISM),
-        ("ch 14  (Japan only)",              "#BF360C", _24G_JP),
+        ("2.4 GHz ISM  (ch 1–13, global)", "#1B5E20", _24G_ISM),
+        ("ch 14  (JP only)", "#BF360C", [140]),
     ]
 
     _BW_ROWS = [
-        ("20 MHz", "14", [(str(c), [c]) for c in range(1, 15)]),
-        # 40 MHz HT40 pairs: primary ch N, secondary ch N+4, center ch N+2
-        ("40 MHz\n(HT40)", "9", [
-            ("3",  [1, 5]),   ("4",  [2, 6]),   ("5",  [3, 7]),
-            ("6",  [4, 8]),   ("7",  [5, 9]),   ("8",  [6, 10]),
-            ("9",  [7, 11]),  ("10", [8, 12]),  ("11", [9, 13]),
-        ]),
+        (
+            "Channels",
+            "",
+            [(str(c if c != 140 else 14), [c]) for c in list(range(1, 14)) + [140]],
+        ),
     ]
 
-    _EXTRA_ROWS = []
+    # Plan rows — each bar spans its actual RF footprint on the column grid.
+    # Phantom cols (-2,-1,14,15) are used for left/right overflow so bars
+    # for ch 1 and ch 13 show their full 20 MHz width.
+    # 4th element: False → non-bold fsmall label (fits 36 px rows).
+    _EXTRA_ROWS = [
+        # ── 3-ch plan (US / global) ────────────────────────────────────────
+        # Each 20 MHz bar: (N-1, N+1) = 3 cols wide = ±1.5 channels from centre
+        # Ch  1: centre col 1,  bar (-1, 2)  — phantom -1 absorbs left overflow
+        # Ch  6: centre col 6,  bar (5, 7)   — 3 cols ✓
+        # Ch 11: centre col 11, bar (10, 12) — 3 cols ✓
+        (
+            "3-ch (1, 6, 11)\nUS/Global",
+            36,
+            [
+                (-1, 2, "#1B5E20", "1"),
+                (5, 7, "#1565C0", "6"),
+                (10, 12, "#B71C1C", "11"),
+            ],
+            False,
+        ),
+        # ── 4-ch plan (Non-US: EU, APAC, Middle East) ─────────────────────
+        # Each 20 MHz bar: (N-1, N+1) = 3 cols wide = ±1.5 channels from centre
+        # Ch  1: (-1, 2)   — phantom -1 absorbs left overflow
+        # Ch  5: (4, 6)    — 3 cols centred on ch 5 ✓
+        # Ch  9: (8, 10)   — 3 cols centred on ch 9 ✓
+        # Ch 13: (12, 14)  — phantom 14 absorbs right overflow ✓
+        (
+            "4-ch (1, 5, 9, 13)\nNon-US",
+            36,
+            [
+                (-1, 2, "#1B5E20", "1"),
+                (4, 6, "#E65100", "5"),
+                (8, 10, "#1565C0", "9"),
+                (12, 14, "#880E4F", "13"),
+            ],
+            False,
+        ),
+        # ── 802.11b — 22 MHz channel width ────────────────────────────────
+        # 3-col bars (±1.5 channels) for visual consistency; label shows 22 MHz.
+        # Ch  5 (2432): centre = col 5  → (4, 6)  ✓
+        # Ch 10 (2457): centre = col 10 → (9, 11) ✓
+        (
+            "802.11b (22 MHz)\n(ch 5, 10)",
+            36,
+            [
+                (4, 6, "#4527A0", "5  (22 MHz)"),
+                (9, 11, "#00695C", "10  (22 MHz)"),
+            ],
+            False,
+        ),
+        # ── 802.11g/n/ax — Japan 14-channel domain ────────────────────────
+        # 3-col bars (±1.5 channels) matching other 20 MHz plan rows.
+        # Ch  4 (2427): centre = col 4  → (3, 5)  ✓
+        # Ch  9 (2452): centre = col 9  → (8, 10) ✓
+        # Ch 14 (2484): Japan-only DSSS — isolated gap column.
+        (
+            "802.11g/n/ax(20 MHz)\n(ch 4, 9, 14)(JP)",
+            36,
+            [
+                (3, 5, "#1B5E20", "4"),
+                (8, 10, "#1565C0", "9"),
+                (140, 140, "#BF360C", "14"),
+            ],
+            False,
+        ),
+    ]
 
     # Wider columns — only 14 channels so we have room
     _BASE_COL_W = 42.0
     _BASE_GAP_W = 18.0
+    _BASE_LEFT_W = 155.0  # wider than default (132) to fit "802.11g/n/ax" label
 
     def _ch_freq(self, ch: int) -> int:
-        if ch == 14:
-            return 2484
+        if ch == 140:
+            return 2484  # Japan-only ch 14
         return 2407 + ch * 5
 
 
@@ -1162,79 +1265,164 @@ class TwoGhzAllocationDiagram(_ChannelTableWidget):
 # ─────────────────────────────────────────────────────────────────────────────
 
 # pre-compute channel sets for UNII bands
-_U1   = [36, 40, 44, 48]
-_U2A  = [52, 56, 60, 64]
-_U2C  = [100,104,108,112,116,120,124,128,132,136,140,144]
-_U3   = [149,153,157,161,165]
+_U1 = [36, 40, 44, 48]
+_U2A = [52, 56, 60, 64]
+_U2C = [100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144]
+_U3 = [149, 153, 157, 161, 165]
 
 
 class FiveGhzAllocationDiagram(_ChannelTableWidget):
     """Table-style 5 GHz channel allocation chart."""
 
-    _TITLE    = "5 GHz Channel Allocations"
+    _TITLE = "5 GHz Channel Allocations"
     _SUBTITLE = "Ctrl+scroll to zoom"
 
     # Columns: real channel numbers + None for spectral gaps with no channels
     _COLS = [
-         36,  40,  44,  48,          # UNII-1   5150–5250 MHz
-         None,                        # gap  (5250–5260 MHz)
-         52,  56,  60,  64,          # UNII-2A  5250–5350 MHz
-         None,                        # gap  (5350–5470 MHz — no allocations)
-        100, 104, 108, 112,
-        116, 120, 124, 128,
-        132, 136, 140, 144,          # UNII-2C  5470–5725 MHz
-         None,                        # gap  (5720–5745 MHz)
-        149, 153, 157, 161, 165,     # UNII-3   5725–5850 MHz
+        36,
+        40,
+        44,
+        48,  # UNII-1   5150–5250 MHz
+        None,  # gap  (5250–5260 MHz)
+        52,
+        56,
+        60,
+        64,  # UNII-2A  5250–5350 MHz
+        None,  # gap  (5350–5470 MHz — no allocations)
+        100,
+        104,
+        108,
+        112,
+        116,
+        120,
+        124,
+        128,
+        132,
+        136,
+        140,
+        144,  # UNII-2C  5470–5725 MHz
+        None,  # gap  (5720–5745 MHz)
+        149,
+        153,
+        157,
+        161,
+        165,  # UNII-3   5725–5850 MHz
     ]
 
     _UNII_BANDS = [
-        ("UNII-1",          "#388E3C", _U1),
-        ("UNII-2A",         "#1976D2", _U2A),
-        ("UNII-2C (Ext.)",  "#0D47A1", _U2C),
-        ("UNII-3",          "#E64A19", _U3),
+        ("UNII-1", "#388E3C", _U1),
+        ("UNII-2A", "#1976D2", _U2A),
+        ("UNII-2C (Ext.)", "#0D47A1", _U2C),
+        ("UNII-3", "#E64A19", _U3),
     ]
 
     _BW_ROWS = [
-        ("20 MHz", "25", [
-            ("36",[36]),("40",[40]),("44",[44]),("48",[48]),
-            ("52",[52]),("56",[56]),("60",[60]),("64",[64]),
-            ("100",[100]),("104",[104]),("108",[108]),("112",[112]),
-            ("116",[116]),("120",[120]),("124",[124]),("128",[128]),
-            ("132",[132]),("136",[136]),("140",[140]),("144",[144]),
-            ("149",[149]),("153",[153]),("157",[157]),("161",[161]),("165",[165]),
-        ]),
-        ("40 MHz", "12", [
-            ("38",[36,40]),("46",[44,48]),
-            ("54",[52,56]),("62",[60,64]),
-            ("102",[100,104]),("110",[108,112]),("118",[116,120]),
-            ("126",[124,128]),("134",[132,136]),("142",[140,144]),
-            ("151",[149,153]),("159",[157,161]),
-        ]),
-        ("80 MHz", "6", [
-            ("42",[36,40,44,48]),
-            ("58",[52,56,60,64]),
-            ("106",[100,104,108,112]),("122",[116,120,124,128]),
-            ("138",[132,136,140,144]),
-            ("155",[149,153,157,161]),
-        ]),
-        ("160 MHz", "2", [
-            ("50", [36,40,44,48,52,56,60,64]),
-            ("114",[100,104,108,112,116,120,124,128]),
-        ]),
+        (
+            "20 MHz",
+            "25",
+            [
+                ("36", [36]),
+                ("40", [40]),
+                ("44", [44]),
+                ("48", [48]),
+                ("52", [52]),
+                ("56", [56]),
+                ("60", [60]),
+                ("64", [64]),
+                ("100", [100]),
+                ("104", [104]),
+                ("108", [108]),
+                ("112", [112]),
+                ("116", [116]),
+                ("120", [120]),
+                ("124", [124]),
+                ("128", [128]),
+                ("132", [132]),
+                ("136", [136]),
+                ("140", [140]),
+                ("144", [144]),
+                ("149", [149]),
+                ("153", [153]),
+                ("157", [157]),
+                ("161", [161]),
+                ("165", [165]),
+            ],
+        ),
+        (
+            "40 MHz",
+            "12",
+            [
+                ("38", [36, 40]),
+                ("46", [44, 48]),
+                ("54", [52, 56]),
+                ("62", [60, 64]),
+                ("102", [100, 104]),
+                ("110", [108, 112]),
+                ("118", [116, 120]),
+                ("126", [124, 128]),
+                ("134", [132, 136]),
+                ("142", [140, 144]),
+                ("151", [149, 153]),
+                ("159", [157, 161]),
+            ],
+        ),
+        (
+            "80 MHz",
+            "6",
+            [
+                ("42", [36, 40, 44, 48]),
+                ("58", [52, 56, 60, 64]),
+                ("106", [100, 104, 108, 112]),
+                ("122", [116, 120, 124, 128]),
+                ("138", [132, 136, 140, 144]),
+                ("155", [149, 153, 157, 161]),
+            ],
+        ),
+        (
+            "160 MHz",
+            "2",
+            [
+                ("50", [36, 40, 44, 48, 52, 56, 60, 64]),
+                ("114", [100, 104, 108, 112, 116, 120, 124, 128]),
+            ],
+        ),
     ]
 
     _EXTRA_ROWS = [
-        ("FCC (USA)", 90, [
-            ( 36,  48, "#81C784", "1,000 mW Tx Power\nIndoor & Outdoor\nNo DFS needed"),
-            ( 52,  64, "#64B5F6", "250 mw w/6dBi\nIndoor & Outdoor\nDFS Required"),
-            (100, 116, "#64B5F6", "250mw w/6dBi\nIndoor & Outdoor\nDFS Required\n144 Now Allowed"),
-            (120, 128, "#FFD54F", "120, 124, 128\nDevices Now\nAllowed"),
-            (132, 144, "#5C8BB0", ""),
-            (149, 165, "#FF8A65", "1,000 mW EIRP\nIndoor & Outdoor\nNo DFS needed\n165 was ISM,\nnow UNII-3"),
-        ]),
-        ("DFS", 24, [
-            (52, 144, "#546E7A", "DFS Channels — ch 52 through 144"),
-        ]),
+        (
+            "FCC (USA)",
+            90,
+            [
+                (
+                    36,
+                    48,
+                    "#81C784",
+                    "1,000 mW Tx Power\nIndoor & Outdoor\nNo DFS needed",
+                ),
+                (52, 64, "#64B5F6", "250 mw w/6dBi\nIndoor & Outdoor\nDFS Required"),
+                (
+                    100,
+                    116,
+                    "#64B5F6",
+                    "250mw w/6dBi\nIndoor & Outdoor\nDFS Required\n144 Now Allowed",
+                ),
+                (120, 128, "#FFD54F", "120, 124, 128\nDevices Now\nAllowed"),
+                (132, 144, "#5C8BB0", ""),
+                (
+                    149,
+                    165,
+                    "#FF8A65",
+                    "1,000 mW EIRP\nIndoor & Outdoor\nNo DFS needed\n165 was ISM,\nnow UNII-3",
+                ),
+            ],
+        ),
+        (
+            "DFS",
+            24,
+            [
+                (52, 144, "#546E7A", "DFS Channels — ch 52 through 144"),
+            ],
+        ),
     ]
 
     def _ch_freq(self, ch: int) -> int:
@@ -1256,7 +1444,7 @@ class FiveGhzAllocationDialog(QDialog):
 
         title = QLabel("5 GHz Channel Allocation Reference")
         title.setObjectName("allocTitle")
-        note  = QLabel(
+        note = QLabel(
             "25 × 20 MHz  ·  12 × 40 MHz  ·  6 × 80 MHz  ·  2 × 160 MHz  "
             "·  Ctrl+scroll to zoom  ·  scroll to pan"
         )
@@ -1278,7 +1466,7 @@ class FiveGhzAllocationDialog(QDialog):
 
     def _apply_theme(self, is_dark: bool):
         bg, border = ("#0f1622", "#273248") if is_dark else ("#ffffff", "#c7d2e3")
-        tc, nc     = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
+        tc, nc = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
         self.setStyleSheet(
             f"QDialog{{background:{bg};border:1px solid {border};border-radius:8px;}}"
             f"QLabel#allocTitle{{color:{tc};font-size:13pt;font-weight:700;}}"
@@ -1297,27 +1485,19 @@ class FiveGhzAllocationDialog(QDialog):
 # ─────────────────────────────────────────────────────────────────────────────
 
 # pre-compute channel sets per UNII sub-band
-_U5 = list(range(  1,  94, 4))   # 24 channels: 1..93
-_U6 = list(range( 97, 114, 4))   # 5  channels: 97..113
-_U7 = list(range(117, 182, 4))   # 17 channels: 117..181
-_U8 = list(range(185, 234, 4))   # 13 channels: 185..233
+_U5 = list(range(1, 94, 4))  # 24 channels: 1..93
+_U6 = list(range(97, 114, 4))  # 5  channels: 97..113
+_U7 = list(range(117, 182, 4))  # 17 channels: 117..181
+_U8 = list(range(185, 234, 4))  # 13 channels: 185..233
 
 
 class SixGhzAllocationDiagram(_ChannelTableWidget):
     """Table-style 6 GHz channel allocation chart — FCC Low Power Indoor."""
 
-    _TITLE    = "6 GHz Channel Allocations — FCC Low Power Indoor (LPI)"
+    _TITLE = "6 GHz Channel Allocations — FCC Low Power Indoor (LPI)"
     _SUBTITLE = "Ctrl+scroll to zoom · No DFS required"
 
-    _COLS = (
-        _U5
-        + [None]
-        + _U6
-        + [None]
-        + _U7
-        + [None]
-        + _U8
-    )
+    _COLS = _U5 + [None] + _U6 + [None] + _U7 + [None] + _U8
 
     _UNII_BANDS = [
         ("UNII-5", "#2E7D32", _U5),
@@ -1329,58 +1509,91 @@ class SixGhzAllocationDiagram(_ChannelTableWidget):
     _BW_ROWS = [
         # 59 × 20 MHz
         ("20 MHz", "59", [(str(c), [c]) for c in _U5 + _U6 + _U7 + _U8]),
-
         # 29 × 40 MHz
         # UNII-5 (12): adjacent pairs (1,5)→3 … (89,93)→91
         # UNII-6 (2):  (97,101)→99, (105,109)→107
         # Cross-6/7 + UNII-7 (9): (113,117)→115, (121,125)→123 … (177,181)→179
         # UNII-8 (6):  (185,189)→187 … (225,229)→227   [ch 233 unpaired]
-        ("40 MHz", "29", [
-            ("3",  [1,5]),   ("11", [9,13]),  ("19",[17,21]), ("27",[25,29]),
-            ("35",[33,37]),  ("43",[41,45]),  ("51",[49,53]), ("59",[57,61]),
-            ("67",[65,69]),  ("75",[73,77]),  ("83",[81,85]), ("91",[89,93]),
-            ("99",[97,101]), ("107",[105,109]),
-            ("115",[113,117]),
-            ("123",[121,125]),("131",[129,133]),("139",[137,141]),
-            ("147",[145,149]),("155",[153,157]),("163",[161,165]),
-            ("171",[169,173]),("179",[177,181]),
-            ("187",[185,189]),
-            ("195",[193,197]),("203",[201,205]),("211",[209,213]),
-            ("219",[217,221]),("227",[225,229]),
-        ]),
-
+        (
+            "40 MHz",
+            "29",
+            [
+                ("3", [1, 5]),
+                ("11", [9, 13]),
+                ("19", [17, 21]),
+                ("27", [25, 29]),
+                ("35", [33, 37]),
+                ("43", [41, 45]),
+                ("51", [49, 53]),
+                ("59", [57, 61]),
+                ("67", [65, 69]),
+                ("75", [73, 77]),
+                ("83", [81, 85]),
+                ("91", [89, 93]),
+                ("99", [97, 101]),
+                ("107", [105, 109]),
+                ("115", [113, 117]),
+                ("123", [121, 125]),
+                ("131", [129, 133]),
+                ("139", [137, 141]),
+                ("147", [145, 149]),
+                ("155", [153, 157]),
+                ("163", [161, 165]),
+                ("171", [169, 173]),
+                ("179", [177, 181]),
+                ("187", [185, 189]),
+                ("195", [193, 197]),
+                ("203", [201, 205]),
+                ("211", [209, 213]),
+                ("219", [217, 221]),
+                ("227", [225, 229]),
+            ],
+        ),
         # 14 × 80 MHz
         # UNII-5 (6): (1..13)→7 … (81..93)→87
         # UNII-6 (1): (97..109)→103
         # Cross-6/7 (1): (113..125)→119
         # UNII-7 (4): (129..141)→135 … (161..173)→167,  cross-7/8: (177..189)→183
         # UNII-8 (2): (193..205)→199, (209..221)→215
-        ("80 MHz", "14", [
-            ("7",  [1,5,9,13]),       ("23",  [17,21,25,29]),
-            ("39", [33,37,41,45]),    ("55",  [49,53,57,61]),
-            ("71", [65,69,73,77]),    ("87",  [81,85,89,93]),
-            ("103",[97,101,105,109]),
-            ("119",[113,117,121,125]),
-            ("135",[129,133,137,141]),("151",[145,149,153,157]),
-            ("167",[161,165,169,173]),("183",[177,181,185,189]),
-            ("199",[193,197,201,205]),("215",[209,213,217,221]),
-        ]),
-
+        (
+            "80 MHz",
+            "14",
+            [
+                ("7", [1, 5, 9, 13]),
+                ("23", [17, 21, 25, 29]),
+                ("39", [33, 37, 41, 45]),
+                ("55", [49, 53, 57, 61]),
+                ("71", [65, 69, 73, 77]),
+                ("87", [81, 85, 89, 93]),
+                ("103", [97, 101, 105, 109]),
+                ("119", [113, 117, 121, 125]),
+                ("135", [129, 133, 137, 141]),
+                ("151", [145, 149, 153, 157]),
+                ("167", [161, 165, 169, 173]),
+                ("183", [177, 181, 185, 189]),
+                ("199", [193, 197, 201, 205]),
+                ("215", [209, 213, 217, 221]),
+            ],
+        ),
         # 7 × 160 MHz
         # UNII-5 (3): (1..29)→15, (33..61)→47, (65..93)→79
         # Cross-6/7 (1): (97..125)→111
         # UNII-7 (1): (129..157)→143
         # Cross-7/8 (1): (161..189)→175 (spans UNII-7 and start of UNII-8)
         # UNII-8 (1): (193..221)→207
-        ("160 MHz", "7", [
-            ("15", [1,5,9,13,17,21,25,29]),
-            ("47", [33,37,41,45,49,53,57,61]),
-            ("79", [65,69,73,77,81,85,89,93]),
-            ("111",[97,101,105,109,113,117,121,125]),
-            ("143",[129,133,137,141,145,149,153,157]),
-            ("175",[161,165,169,173,177,181,185,189]),
-            ("207",[193,197,201,205,209,213,217,221]),
-        ]),
+        (
+            "160 MHz",
+            "7",
+            [
+                ("15", [1, 5, 9, 13, 17, 21, 25, 29]),
+                ("47", [33, 37, 41, 45, 49, 53, 57, 61]),
+                ("79", [65, 69, 73, 77, 81, 85, 89, 93]),
+                ("111", [97, 101, 105, 109, 113, 117, 121, 125]),
+                ("143", [129, 133, 137, 141, 145, 149, 153, 157]),
+                ("175", [161, 165, 169, 173, 177, 181, 185, 189]),
+                ("207", [193, 197, 201, 205, 209, 213, 217, 221]),
+            ],
+        ),
     ]
 
     _EXTRA_ROWS = []
@@ -1408,7 +1621,7 @@ class SixGhzAllocationDialog(QDialog):
 
         title = QLabel("6 GHz Channel Allocation Reference")
         title.setObjectName("allocTitle")
-        note  = QLabel(
+        note = QLabel(
             "FCC Low Power Indoor (LPI)  ·  UNII-5/6/7/8  ·  No DFS Required  "
             "·  59 × 20 MHz  ·  29 × 40 MHz  ·  14 × 80 MHz  ·  7 × 160 MHz  "
             "·  Ctrl+scroll to zoom"
@@ -1431,7 +1644,7 @@ class SixGhzAllocationDialog(QDialog):
 
     def _apply_theme(self, is_dark: bool):
         bg, border = ("#0f1622", "#273248") if is_dark else ("#ffffff", "#c7d2e3")
-        tc, nc     = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
+        tc, nc = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
         self.setStyleSheet(
             f"QDialog{{background:{bg};border:1px solid {border};border-radius:8px;}}"
             f"QLabel#allocTitle{{color:{tc};font-size:13pt;font-weight:700;}}"
@@ -1447,6 +1660,7 @@ class SixGhzAllocationDialog(QDialog):
 # ─────────────────────────────────────────────────────────────────────────────
 # Combined Channel Allocations dialog (5 GHz + 6 GHz on one page)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class ChannelAllocationsDialog(QDialog):
     """Single popup showing the 5 GHz and 6 GHz allocation tables stacked."""
@@ -1464,7 +1678,7 @@ class ChannelAllocationsDialog(QDialog):
         title = QLabel("Channel Allocation Reference")
         title.setObjectName("allocTitle")
         note = QLabel(
-            "2.4 GHz: 14\u00d720 MHz \u00b7 9\u00d740 MHz (HT40)  \u00b7  "
+            "2.4 GHz: 3-ch plan (1,6,11) \u00b7 4-ch plan (1,5,9,13) \u00b7 802.11b 22 MHz \u00b7 802.11g/n/ax JP  \u00b7  "
             "5 GHz: 25\u00d720 \u00b7 12\u00d740 \u00b7 6\u00d780 \u00b7 2\u00d7160 MHz  \u00b7  "
             "6 GHz (FCC LPI): 59\u00d720 \u00b7 29\u00d740 \u00b7 14\u00d780 \u00b7 7\u00d7160 MHz  \u00b7  "
             "Ctrl+scroll to zoom  \u00b7  scroll to pan"
@@ -1500,7 +1714,7 @@ class ChannelAllocationsDialog(QDialog):
 
     def _apply_theme(self, is_dark: bool):
         bg, border = ("#0f1622", "#273248") if is_dark else ("#ffffff", "#c7d2e3")
-        tc, nc     = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
+        tc, nc = ("#dfe7f5", "#8ea0bf") if is_dark else ("#22314a", "#4a5a73")
         self.setStyleSheet(
             f"QDialog{{background:{bg};border:1px solid {border};border-radius:8px;}}"
             f"QLabel#allocTitle{{color:{tc};font-size:13pt;font-weight:700;}}"
