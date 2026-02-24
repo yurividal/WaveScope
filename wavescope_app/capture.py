@@ -155,7 +155,9 @@ class CaptureTypeDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
 
         title = QLabel("Choose capture type")
-        title.setStyleSheet(f"font-size:13pt; font-weight:bold; color:{CAPTURE_TITLE_FG};")
+        title.setStyleSheet(
+            f"font-size:13pt; font-weight:bold; color:{CAPTURE_TITLE_FG};"
+        )
         layout.addWidget(title)
 
         note = QLabel("Both modes require a root password prompt (pkexec / Polkit).")
@@ -231,11 +233,17 @@ class CaptureTypeDialog(QDialog):
         inner.setContentsMargins(14, 12, 14, 12)
         inner.setSpacing(3)
         lbl_t = QLabel(title)
-        lbl_t.setStyleSheet(f"font-size:12pt; font-weight:bold; color:{CAPTURE_CARD_TITLE_FG};")
+        lbl_t.setStyleSheet(
+            f"font-size:12pt; font-weight:bold; color:{CAPTURE_CARD_TITLE_FG};"
+        )
         lbl_s = QLabel(subtitle)
-        lbl_s.setStyleSheet(f"font-size:9.5pt; color:{CAPTURE_CARD_SUB_FG}; font-style:italic;")
+        lbl_s.setStyleSheet(
+            f"font-size:9.5pt; color:{CAPTURE_CARD_SUB_FG}; font-style:italic;"
+        )
         lbl_b = QLabel(body)
-        lbl_b.setStyleSheet(f"font-size:9pt; color:{CAPTURE_CARD_BODY_FG}; margin-top:4px;")
+        lbl_b.setStyleSheet(
+            f"font-size:9pt; color:{CAPTURE_CARD_BODY_FG}; margin-top:4px;"
+        )
         lbl_b.setWordWrap(True)
         for lbl in (lbl_t, lbl_s, lbl_b):
             lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -363,7 +371,9 @@ class MonitorModeWindow(QDialog):
         self._lbl_state = QLabel("Idle")
         self._lbl_state.setStyleSheet(f"font-weight:bold; color:{BTN_ACCENT};")
         self._lbl_elapsed = QLabel("00:00")
-        self._lbl_elapsed.setStyleSheet(f"color:{GRAPH_FG_DARK}; font-family:monospace;")
+        self._lbl_elapsed.setStyleSheet(
+            f"color:{GRAPH_FG_DARK}; font-family:monospace;"
+        )
         self._lbl_size = QLabel("")
         self._lbl_size.setStyleSheet(f"color:{GRAPH_FG_DARK};")
         stats_row.addWidget(self._lbl_state)
@@ -812,7 +822,9 @@ class ManagedCaptureWindow(QDialog):
         self._lbl_state = QLabel("Idle")
         self._lbl_elapsed = QLabel("00:00")
         self._lbl_size = QLabel("File:  0 KB")
-        self._lbl_state.setStyleSheet(f"color:{CAPTURE_MGD_STATE_FG}; font-weight:bold;")
+        self._lbl_state.setStyleSheet(
+            f"color:{CAPTURE_MGD_STATE_FG}; font-weight:bold;"
+        )
         status_row.addWidget(self._lbl_state)
         status_row.addStretch()
         status_row.addWidget(QLabel("Elapsed:"))

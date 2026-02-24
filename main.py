@@ -14,13 +14,12 @@ from PyQt6.QtWidgets import QApplication
 
 from wavescope_app.core import APP_NAME
 from wavescope_app.main_window import MainWindow
-from wavescope_app.theme import _dark_palette
+from wavescope_app.theme import _dark_palette, GRAPH_BG_DARK, GRAPH_AXIS_DARK
 
 
 def main():
     # ── Pyqtgraph config must come before QApplication ─────────────────────
-    plot_bg = "#0d1117"
-    pg.setConfigOptions(antialias=True, foreground="#a9b4cc", background=plot_bg)
+    pg.setConfigOptions(antialias=True, foreground=GRAPH_AXIS_DARK, background=GRAPH_BG_DARK)
 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
@@ -42,7 +41,7 @@ def main():
     app.setFont(font)
 
     win = MainWindow()
-    win.show()
+    win.showMaximized()
     sys.exit(app.exec())
 
 

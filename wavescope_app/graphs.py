@@ -10,28 +10,62 @@ from .theme import (
     UNII6_CHAN_COLORS,
     UNII_CHAN_COLORS,
     UNII_NAME_COLORS,
-    SIG_EXCELLENT, SIG_GOOD, SIG_FAIR, SIG_WEAK, SIG_POOR,
-    GRAPH_BG_DARK, GRAPH_AXIS_DARK, GRAPH_AXIS_LIGHT,
+    SIG_EXCELLENT,
+    SIG_GOOD,
+    SIG_FAIR,
+    SIG_WEAK,
+    SIG_POOR,
+    GRAPH_BG_DARK,
+    GRAPH_AXIS_DARK,
+    GRAPH_AXIS_LIGHT,
     FALLBACK_GRAY,
-    DFS_AXIS_COLOR, DFS_FILL_COLOR,
-    ALLOC_GRID_DARK, ALLOC_GRID_LIGHT,
-    ALLOC_CELL_BG_DARK, ALLOC_CELL_BG_LIGHT,
-    ALLOC_LBL_BG_DARK, ALLOC_LBL_BG_LIGHT,
-    ALLOC_TEXT_DARK, ALLOC_TEXT_LIGHT,
-    ALLOC_DIM_DARK, ALLOC_DIM_LIGHT,
-    ALLOC_WHITE, ALLOC_BLACK, ALLOC_ONBAND_DARK,
-    DIALOG_BG_DARK, DIALOG_BG_LIGHT,
-    DIALOG_BORDER_DARK, DIALOG_BORDER_LIGHT,
-    DIALOG_TEXT_DARK, DIALOG_TEXT_LIGHT,
-    DIALOG_NOTE_DARK, DIALOG_NOTE_LIGHT,
-    PLAN_2G_ISM_HEADER, PLAN_2G_JP_HEADER,
-    PLAN_CH1, PLAN_CH6, PLAN_CH11,
-    PLAN_EU_CH5, PLAN_EU_CH13,
-    PLAN_JP_CH5, PLAN_JP_CH10,
-    ALLOC_5G_U1, ALLOC_5G_U2A, ALLOC_5G_U2C, ALLOC_5G_U3,
-    ALLOC_5G_36_48, ALLOC_5G_52_116, ALLOC_5G_120_128,
-    ALLOC_5G_132_144, ALLOC_5G_149_165, ALLOC_5G_DFS_BAND,
-    ALLOC_6G_U5, ALLOC_6G_U6, ALLOC_6G_U7, ALLOC_6G_U8,
+    DFS_AXIS_COLOR,
+    DFS_FILL_COLOR,
+    ALLOC_GRID_DARK,
+    ALLOC_GRID_LIGHT,
+    ALLOC_CELL_BG_DARK,
+    ALLOC_CELL_BG_LIGHT,
+    ALLOC_LBL_BG_DARK,
+    ALLOC_LBL_BG_LIGHT,
+    ALLOC_TEXT_DARK,
+    ALLOC_TEXT_LIGHT,
+    ALLOC_DIM_DARK,
+    ALLOC_DIM_LIGHT,
+    ALLOC_WHITE,
+    ALLOC_BLACK,
+    ALLOC_ONBAND_DARK,
+    DIALOG_BG_DARK,
+    DIALOG_BG_LIGHT,
+    DIALOG_BORDER_DARK,
+    DIALOG_BORDER_LIGHT,
+    DIALOG_TEXT_DARK,
+    DIALOG_TEXT_LIGHT,
+    DIALOG_NOTE_DARK,
+    DIALOG_NOTE_LIGHT,
+    PLAN_2G_ISM_HEADER,
+    PLAN_2G_JP_HEADER,
+    PLAN_CH1,
+    PLAN_CH6,
+    PLAN_CH11,
+    PLAN_EU_CH5,
+    PLAN_EU_CH13,
+    PLAN_JP_CH5,
+    PLAN_JP_CH10,
+    ALLOC_5G_U1,
+    ALLOC_5G_U2A,
+    ALLOC_5G_U2C,
+    ALLOC_5G_U3,
+    ALLOC_5G_36_48,
+    ALLOC_5G_52_116,
+    ALLOC_5G_120_128,
+    ALLOC_5G_132_144,
+    ALLOC_5G_149_165,
+    ALLOC_5G_DFS_BAND,
+    ALLOC_6G_U5,
+    ALLOC_6G_U6,
+    ALLOC_6G_U7,
+    ALLOC_6G_U8,
+    vidal0,
 )
 
 
@@ -63,11 +97,11 @@ class DbmAxisItem(pg.AxisItem):
     """
 
     _BANDS = [
-        (-50, 0, SIG_EXCELLENT),   # excellent — green
-        (-60, -50, SIG_GOOD),      # good      — lime
-        (-70, -60, SIG_FAIR),      # fair      — amber
-        (-80, -70, SIG_WEAK),      # weak      — orange
-        (-200, -80, SIG_POOR),     # poor      — red
+        (-50, 0, SIG_EXCELLENT),  # excellent — green
+        (-60, -50, SIG_GOOD),  # good      — lime
+        (-70, -60, SIG_FAIR),  # fair      — amber
+        (-80, -70, SIG_WEAK),  # weak      — orange
+        (-200, -80, SIG_POOR),  # poor      — red
     ]
 
     def _dbm_color(self, text: str):
@@ -616,7 +650,9 @@ class SignalHistoryWidget(QWidget):
         self._plot.setBackground(GRAPH_BG_DARK)
         self._plot.showGrid(x=True, y=True, alpha=0.15)
         self._plot.setLabel("left", "Signal (dBm)", color=GRAPH_AXIS_DARK, size="10pt")
-        self._plot.setLabel("bottom", "Time (s ago)", color=GRAPH_AXIS_DARK, size="10pt")
+        self._plot.setLabel(
+            "bottom", "Time (s ago)", color=GRAPH_AXIS_DARK, size="10pt"
+        )
         self._plot.getAxis("bottom").setTextPen(GRAPH_AXIS_DARK)
         self._plot.setMenuEnabled(True)
         self._plot.getViewBox().setMouseEnabled(x=True, y=True)
@@ -969,13 +1005,13 @@ class _ChannelTableWidget(QWidget):
         BG = pal.color(
             QPalette.ColorRole.Base if is_dark else QPalette.ColorRole.Window
         )
-        GRID    = QColor(ALLOC_GRID_DARK    if is_dark else ALLOC_GRID_LIGHT)
+        GRID = QColor(ALLOC_GRID_DARK if is_dark else ALLOC_GRID_LIGHT)
         CELL_BG = QColor(ALLOC_CELL_BG_DARK if is_dark else ALLOC_CELL_BG_LIGHT)
-        LBL_BG  = QColor(ALLOC_LBL_BG_DARK  if is_dark else ALLOC_LBL_BG_LIGHT)
-        TEXT_C  = QColor(ALLOC_TEXT_DARK     if is_dark else ALLOC_TEXT_LIGHT)
-        DIM_C   = QColor(ALLOC_DIM_DARK      if is_dark else ALLOC_DIM_LIGHT)
-        WHITE   = QColor(ALLOC_WHITE)
-        BLACK   = QColor(ALLOC_BLACK)
+        LBL_BG = QColor(ALLOC_LBL_BG_DARK if is_dark else ALLOC_LBL_BG_LIGHT)
+        TEXT_C = QColor(ALLOC_TEXT_DARK if is_dark else ALLOC_TEXT_LIGHT)
+        DIM_C = QColor(ALLOC_DIM_DARK if is_dark else ALLOC_DIM_LIGHT)
+        WHITE = QColor(ALLOC_WHITE)
+        BLACK = QColor(ALLOC_BLACK)
 
         p.fillRect(self.rect(), BG)
 
@@ -1421,7 +1457,12 @@ class FiveGhzAllocationDiagram(_ChannelTableWidget):
                     ALLOC_5G_36_48,
                     "1,000 mW Tx Power\nIndoor & Outdoor\nNo DFS needed",
                 ),
-                (52, 64, ALLOC_5G_52_116, "250 mw w/6dBi\nIndoor & Outdoor\nDFS Required"),
+                (
+                    52,
+                    64,
+                    ALLOC_5G_52_116,
+                    "250 mw w/6dBi\nIndoor & Outdoor\nDFS Required",
+                ),
                 (
                     100,
                     116,

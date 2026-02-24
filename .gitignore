@@ -13,3 +13,4 @@ dist/
 build/
 .DS_Store
 Vendors/
+.vscode/

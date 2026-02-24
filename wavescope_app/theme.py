@@ -109,94 +109,94 @@ BAND_SUBBAND_HEADERS = {
 
 
 # ── Signal quality (dBm scale) ──────────────────────────────────────────────
-SIG_EXCELLENT = "#4caf50"   # ≥ −50 dBm — green
-SIG_GOOD      = "#8bc34a"   # −60 … −50 dBm — lime
-SIG_FAIR      = "#ffc107"   # −70 … −60 dBm — amber
-SIG_WEAK      = "#ff9800"   # −80 … −70 dBm — orange
-SIG_POOR      = "#f44336"   # < −80 dBm — red
+SIG_EXCELLENT = "#4caf50"  # ≥ −50 dBm — green
+SIG_GOOD = "#8bc34a"  # −60 … −50 dBm — lime
+SIG_FAIR = "#ffc107"  # −70 … −60 dBm — amber
+SIG_WEAK = "#ff9800"  # −80 … −70 dBm — orange
+SIG_POOR = "#f44336"  # < −80 dBm — red
 
 # nmcli 0-100 signal quality (slightly different shades from dBm tiers)
-SIG_FAIR_NM   = "#ffb300"   # nmcli ≥ 50 — deep amber
-SIG_WEAK_NM   = "#ff7043"   # nmcli ≥ 30 — orange-red
-SIG_POOR_NM   = "#ef5350"   # nmcli < 30 — red (also used for vendor error)
+SIG_FAIR_NM = "#ffb300"  # nmcli ≥ 50 — deep amber
+SIG_WEAK_NM = "#ff7043"  # nmcli ≥ 30 — orange-red
+SIG_POOR_NM = "#ef5350"  # nmcli < 30 — red (also used for vendor error)
 
 # ── Graph / plot neutral colours ─────────────────────────────────────────────
-GRAPH_BG_DARK    = "#0d1117"
-GRAPH_BG_LIGHT   = "#f0f4f8"
-GRAPH_AXIS_DARK  = "#8a96b0"
+GRAPH_BG_DARK = "#0d1117"
+GRAPH_BG_LIGHT = "#f0f4f8"
+GRAPH_AXIS_DARK = "#8a96b0"
 GRAPH_AXIS_LIGHT = "#445566"
-GRAPH_FG_DARK    = "#a9b4cc"
-GRAPH_FG_LIGHT   = "#444455"
-FALLBACK_GRAY    = "#888888"   # default colour when no SSID palette entry matched
+GRAPH_FG_DARK = "#a9b4cc"
+GRAPH_FG_LIGHT = "#444455"
+FALLBACK_GRAY = "#888888"  # default colour when no SSID palette entry matched
 
 # ── DFS channel indicators ────────────────────────────────────────────────────
-DFS_AXIS_COLOR = "#64b5f6"   # DFS segment highlight on bottom axis (blue)
-DFS_FILL_COLOR = "#a952bd"   # DFS overlay on channel graph (purple)
+DFS_AXIS_COLOR = "#64b5f6"  # DFS segment highlight on bottom axis (blue)
+DFS_FILL_COLOR = "#a952bd"  # DFS overlay on channel graph (purple)
 
 # ── Channel-allocation table painting ────────────────────────────────────────
-ALLOC_GRID_DARK     = "#3a4a5e"
-ALLOC_GRID_LIGHT    = "#8a9ab8"
-ALLOC_CELL_BG_DARK  = "#18203a"
+ALLOC_GRID_DARK = "#3a4a5e"
+ALLOC_GRID_LIGHT = "#8a9ab8"
+ALLOC_CELL_BG_DARK = "#18203a"
 ALLOC_CELL_BG_LIGHT = "#edf1fb"
-ALLOC_LBL_BG_DARK   = "#232d40"
-ALLOC_LBL_BG_LIGHT  = "#d8dfee"
-ALLOC_TEXT_DARK     = "#dde8f8"
-ALLOC_TEXT_LIGHT    = "#1a2438"
-ALLOC_DIM_DARK      = "#6a7e9a"
-ALLOC_DIM_LIGHT     = "#5a6a82"
-ALLOC_WHITE         = "#ffffff"
-ALLOC_BLACK         = "#0a0f1a"
-ALLOC_ONBAND_DARK   = "#f0f6ff"   # text drawn on top of coloured band cells (dark mode)
+ALLOC_LBL_BG_DARK = "#232d40"
+ALLOC_LBL_BG_LIGHT = "#d8dfee"
+ALLOC_TEXT_DARK = "#dde8f8"
+ALLOC_TEXT_LIGHT = "#1a2438"
+ALLOC_DIM_DARK = "#6a7e9a"
+ALLOC_DIM_LIGHT = "#5a6a82"
+ALLOC_WHITE = "#ffffff"
+ALLOC_BLACK = "#0a0f1a"
+ALLOC_ONBAND_DARK = "#f0f6ff"  # text drawn on top of coloured band cells (dark mode)
 
 # ── Allocation dialog and details-card chrome ─────────────────────────────────
-DIALOG_BG_DARK        = "#0f1622"
-DIALOG_BG_LIGHT       = "#ffffff"
-DIALOG_BORDER_DARK    = "#273248"
-DIALOG_BORDER_LIGHT   = "#c7d2e3"
-DIALOG_TEXT_DARK      = "#dfe7f5"
-DIALOG_TEXT_LIGHT     = "#22314a"
-DIALOG_NOTE_DARK      = "#8ea0bf"
-DIALOG_NOTE_LIGHT     = "#4a5a73"
+DIALOG_BG_DARK = "#0f1622"
+DIALOG_BG_LIGHT = "#ffffff"
+DIALOG_BORDER_DARK = "#273248"
+DIALOG_BORDER_LIGHT = "#c7d2e3"
+DIALOG_TEXT_DARK = "#dfe7f5"
+DIALOG_TEXT_LIGHT = "#22314a"
+DIALOG_NOTE_DARK = "#8ea0bf"
+DIALOG_NOTE_LIGHT = "#4a5a73"
 # Details card (slightly deeper background than the allocation dialog)
-CARD_BG_DARK            = "#121a27"
-CARD_VALUE_BG_DARK      = DIALOG_BG_DARK
-CARD_VALUE_BORDER_DARK  = "#2a3850"
-CARD_VALUE_BG_LIGHT     = "#eef3fb"
+CARD_BG_DARK = "#121a27"
+CARD_VALUE_BG_DARK = DIALOG_BG_DARK
+CARD_VALUE_BORDER_DARK = "#2a3850"
+CARD_VALUE_BG_LIGHT = "#eef3fb"
 CARD_VALUE_BORDER_LIGHT = "#c8d6ee"
 
 # ── Toolbar action buttons ────────────────────────────────────────────────────
-BTN_ACCENT         = "#7eb8f7"   # button text / link accent
-BTN_BORDER         = "#2a4a70"   # button border
-BTN_HOVER_BG       = "#1a2a40"   # hover background
-BTN_CHECKED_TEXT   = "#f9a825"   # checked / warning amber text
-BTN_CHECKED_BORDER = "#7a5a00"   # checked border
-BTN_CHECKED_BG     = "#2a2010"   # checked background
+BTN_ACCENT = "#7eb8f7"  # button text / link accent
+BTN_BORDER = "#2a4a70"  # button border
+BTN_HOVER_BG = "#1a2a40"  # hover background
+BTN_CHECKED_TEXT = "#f9a825"  # checked / warning amber text
+BTN_CHECKED_BORDER = "#7a5a00"  # checked border
+BTN_CHECKED_BG = "#2a2010"  # checked background
 
 # ── First-scan overlay ────────────────────────────────────────────────────────
-SCAN_OVERLAY_BG      = "rgba(10,15,30,210)"
+SCAN_OVERLAY_BG = "rgba(10,15,30,210)"
 SCAN_OVERLAY_HEADING = "#9bbfe0"
-SCAN_OVERLAY_SUB     = "#506070"
+SCAN_OVERLAY_SUB = "#506070"
 
 # ── Table row colours ─────────────────────────────────────────────────────────
-TABLE_LINGER_FG = "#4a5a72"   # dimmed row foreground during AP linger period
+TABLE_LINGER_FG = "#4a5a72"  # dimmed row foreground during AP linger period
 
 # ── Security / PMF badge colours ──────────────────────────────────────────────
-SEC_BAD      = "#b71c1c"   # open / no security
-SEC_WPA2     = "#0d47a1"   # WPA2
-SEC_WPA3     = "#1b5e20"   # WPA3 or WPA2+WPA3
-SEC_OTHER    = "#37474F"   # unknown / other
-PMF_OPTIONAL = "#e65100"   # PMF optional (amber-orange)
+SEC_BAD = "#b71c1c"  # open / no security
+SEC_WPA2 = "#0d47a1"  # WPA2
+SEC_WPA3 = "#1b5e20"  # WPA3 or WPA2+WPA3
+SEC_OTHER = "#37474F"  # unknown / other
+PMF_OPTIONAL = "#e65100"  # PMF optional (amber-orange)
 # PMF Required → reuse SEC_WPA3;  PMF None → reuse SEC_BAD
 
 # ── Vendor-status dialog ──────────────────────────────────────────────────────
-VENDOR_MUTED   = GRAPH_AXIS_DARK   # "#8a96b0" — subdued info text
-VENDOR_SUCCESS = SIG_EXCELLENT     # "#4caf50" — success green
-VENDOR_ERROR   = SIG_POOR_NM       # "#ef5350" — error red
+VENDOR_MUTED = GRAPH_AXIS_DARK  # "#8a96b0" — subdued info text
+VENDOR_SUCCESS = SIG_EXCELLENT  # "#4caf50" — success green
+VENDOR_ERROR = SIG_POOR_NM  # "#ef5350" — error red
 
 # ── Context menu ──────────────────────────────────────────────────────────────
-MENU_BG       = "#131926"
-MENU_BORDER   = "#2a3350"
-MENU_TEXT     = "#d0d8f0"
+MENU_BG = "#131926"
+MENU_BORDER = "#2a3350"
+MENU_TEXT = "#d0d8f0"
 MENU_SELECTED = "#1e4a80"
 
 # ── Connected AP highlight ────────────────────────────────────────────────────
@@ -206,63 +206,63 @@ CONNECTED_GREEN = "#2e7d32"
 HTML_MUTED = "#777"
 
 # ── Capture window ────────────────────────────────────────────────────────────
-CAPTURE_TITLE_FG        = "#e0e0e0"
-CAPTURE_CARD_MON_BG     = "#1a3050"
-CAPTURE_CARD_MON_HOVER  = "#1e4a80"
-CAPTURE_CARD_MGD_BG     = "#1a3a1a"
-CAPTURE_CARD_MGD_HOVER  = "#1e5a22"
-CAPTURE_CARD_BORDER     = "#334"
-CAPTURE_CARD_TITLE_FG   = "#ffffff"
-CAPTURE_CARD_SUB_FG     = "#aad4ff"
-CAPTURE_CARD_BODY_FG    = "#b0c8d8"
-CAPTURE_WARN_BG         = "#2a1800"
-CAPTURE_WARN_FG         = "#ffcc66"
-CAPTURE_WARN_BORDER     = "#a06010"
-CAPTURE_BTN_START_BG    = "#1a5c2a"
-CAPTURE_BTN_START_FG    = "#ccffcc"
+CAPTURE_TITLE_FG = "#e0e0e0"
+CAPTURE_CARD_MON_BG = "#1a3050"
+CAPTURE_CARD_MON_HOVER = "#1e4a80"
+CAPTURE_CARD_MGD_BG = "#1a3a1a"
+CAPTURE_CARD_MGD_HOVER = "#1e5a22"
+CAPTURE_CARD_BORDER = "#334"
+CAPTURE_CARD_TITLE_FG = "#ffffff"
+CAPTURE_CARD_SUB_FG = "#aad4ff"
+CAPTURE_CARD_BODY_FG = "#b0c8d8"
+CAPTURE_WARN_BG = "#2a1800"
+CAPTURE_WARN_FG = "#ffcc66"
+CAPTURE_WARN_BORDER = "#a06010"
+CAPTURE_BTN_START_BG = "#1a5c2a"
+CAPTURE_BTN_START_FG = "#ccffcc"
 CAPTURE_BTN_START_HOVER = "#226b33"
-CAPTURE_BTN_DIS_BG      = "#1a2210"
-CAPTURE_BTN_DIS_FG      = "#446644"
-CAPTURE_LOG_BG          = "#090d14"
-CAPTURE_LOG_FG          = "#8fa8c0"
-CAPTURE_BTN_STOP_BG     = "#6b1a1a"
-CAPTURE_BTN_STOP_FG     = "#ffcccc"
-CAPTURE_BTN_STOP_HOVER  = "#7f2020"
-CAPTURE_BANNER_BG       = "#1e2e10"
-CAPTURE_BANNER_FG       = "#cceeaa"
+CAPTURE_BTN_DIS_BG = "#1a2210"
+CAPTURE_BTN_DIS_FG = "#446644"
+CAPTURE_LOG_BG = "#090d14"
+CAPTURE_LOG_FG = "#8fa8c0"
+CAPTURE_BTN_STOP_BG = "#6b1a1a"
+CAPTURE_BTN_STOP_FG = "#ffcccc"
+CAPTURE_BTN_STOP_HOVER = "#7f2020"
+CAPTURE_BANNER_BG = "#1e2e10"
+CAPTURE_BANNER_FG = "#cceeaa"
 # Managed-mode–specific
-CAPTURE_MGD_STATE_FG    = "#88bb88"
-CAPTURE_MGD_LOG_BG      = "#0e1a0e"
-CAPTURE_MGD_LOG_FG      = "#a0d8a0"
+CAPTURE_MGD_STATE_FG = "#88bb88"
+CAPTURE_MGD_LOG_BG = "#0e1a0e"
+CAPTURE_MGD_LOG_FG = "#a0d8a0"
 
 # ── 2.4 GHz channel plan colours ─────────────────────────────────────────────
-PLAN_2G_ISM_HEADER = "#1B5E20"   # ISM band header (dark green)
-PLAN_2G_JP_HEADER  = "#BF360C"   # Japan ch-14 header (deep orange)
-PLAN_CH1           = "#1B5E20"   # ch 1  (NA / EU / JP plans)
-PLAN_CH6           = "#1565C0"   # ch 6  (NA) / ch 9 (EU / JP plans)
-PLAN_CH11          = "#B71C1C"   # ch 11 (NA plan)
-PLAN_EU_CH5        = "#E65100"   # ch 5  (EU 4-ch plan)
-PLAN_EU_CH13       = "#880E4F"   # ch 13 (EU 4-ch plan)
-PLAN_JP_CH5        = "#4527A0"   # ch 5  (JP 802.11b 22 MHz plan)
-PLAN_JP_CH10       = "#00695C"   # ch 10 (JP 802.11b 22 MHz plan)
+PLAN_2G_ISM_HEADER = "#1B5E20"  # ISM band header (dark green)
+PLAN_2G_JP_HEADER = "#BF360C"  # Japan ch-14 header (deep orange)
+PLAN_CH1 = "#1B5E20"  # ch 1  (NA / EU / JP plans)
+PLAN_CH6 = "#1565C0"  # ch 6  (NA) / ch 9 (EU / JP plans)
+PLAN_CH11 = "#B71C1C"  # ch 11 (NA plan)
+PLAN_EU_CH5 = "#E65100"  # ch 5  (EU 4-ch plan)
+PLAN_EU_CH13 = "#880E4F"  # ch 13 (EU 4-ch plan)
+PLAN_JP_CH5 = "#4527A0"  # ch 5  (JP 802.11b 22 MHz plan)
+PLAN_JP_CH10 = "#00695C"  # ch 10 (JP 802.11b 22 MHz plan)
 
 # ── 5 GHz allocation plan colours ────────────────────────────────────────────
-ALLOC_5G_U1       = "#388E3C"   # UNII-1
-ALLOC_5G_U2A      = "#1976D2"   # UNII-2A
-ALLOC_5G_U2C      = "#0D47A1"   # UNII-2C (Extended)
-ALLOC_5G_U3       = "#E64A19"   # UNII-3
-ALLOC_5G_36_48    = "#81C784"   # 36–48: 1 W Tx, no DFS (light green)
-ALLOC_5G_52_116   = "#64B5F6"   # 52–64 / 100–116: DFS required (light blue)
-ALLOC_5G_120_128  = "#FFD54F"   # 120–128: newly allowed channels (amber)
-ALLOC_5G_132_144  = "#5C8BB0"   # 132–144 (steel blue)
-ALLOC_5G_149_165  = "#FF8A65"   # 149–165: 1 W EIRP, no DFS (light orange)
-ALLOC_5G_DFS_BAND = "#546E7A"   # overall DFS band indicator (blue-grey)
+ALLOC_5G_U1 = "#388E3C"  # UNII-1
+ALLOC_5G_U2A = "#1976D2"  # UNII-2A
+ALLOC_5G_U2C = "#0D47A1"  # UNII-2C (Extended)
+ALLOC_5G_U3 = "#E64A19"  # UNII-3
+ALLOC_5G_36_48 = "#81C784"  # 36–48: 1 W Tx, no DFS (light green)
+ALLOC_5G_52_116 = "#64B5F6"  # 52–64 / 100–116: DFS required (light blue)
+ALLOC_5G_120_128 = "#FFD54F"  # 120–128: newly allowed channels (amber)
+ALLOC_5G_132_144 = "#5C8BB0"  # 132–144 (steel blue)
+ALLOC_5G_149_165 = "#FF8A65"  # 149–165: 1 W EIRP, no DFS (light orange)
+ALLOC_5G_DFS_BAND = "#546E7A"  # overall DFS band indicator (blue-grey)
 
 # ── 6 GHz allocation plan colours ────────────────────────────────────────────
-ALLOC_6G_U5 = "#2E7D32"   # UNII-5 (dark green)
-ALLOC_6G_U6 = "#00695C"   # UNII-6 (dark teal)
-ALLOC_6G_U7 = "#1565C0"   # UNII-7 (royal blue)
-ALLOC_6G_U8 = "#6A1B9A"   # UNII-8 (deep purple)
+ALLOC_6G_U5 = "#2E7D32"  # UNII-5 (dark green)
+ALLOC_6G_U6 = "#00695C"  # UNII-6 (dark teal)
+ALLOC_6G_U7 = "#1565C0"  # UNII-7 (royal blue)
+ALLOC_6G_U8 = "#6A1B9A"  # UNII-8 (deep purple)
 
 
 # ── Theme palette helpers ────────────────────────────────────────────────────

@@ -9,17 +9,40 @@ from .core_vendor import _resolve_vendor_icon_path
 from .graphs import ChannelAllocationsDialog
 from .capture import CaptureTypeDialog, ManagedCaptureWindow, MonitorModeWindow
 from .theme import (
-    IW_GEN_COLORS, _dark_palette, _light_palette,
-    GRAPH_BG_DARK, GRAPH_BG_LIGHT, GRAPH_FG_DARK, GRAPH_FG_LIGHT,
-    CARD_BG_DARK, CARD_VALUE_BG_DARK, CARD_VALUE_BORDER_DARK,
-    CARD_VALUE_BG_LIGHT, CARD_VALUE_BORDER_LIGHT,
-    DIALOG_BORDER_DARK, DIALOG_BORDER_LIGHT,
-    DIALOG_TEXT_DARK, DIALOG_TEXT_LIGHT,
-    DIALOG_NOTE_DARK, DIALOG_NOTE_LIGHT,
-    SIG_POOR, SIG_WEAK, SIG_FAIR, SIG_EXCELLENT,
-    SEC_BAD, SEC_WPA2, SEC_WPA3, SEC_OTHER, PMF_OPTIONAL,
-    MENU_BG, MENU_BORDER, MENU_TEXT, MENU_SELECTED,
-    CONNECTED_GREEN, HTML_MUTED, FALLBACK_GRAY,
+    IW_GEN_COLORS,
+    _dark_palette,
+    _light_palette,
+    GRAPH_BG_DARK,
+    GRAPH_BG_LIGHT,
+    GRAPH_FG_DARK,
+    GRAPH_FG_LIGHT,
+    CARD_BG_DARK,
+    CARD_VALUE_BG_DARK,
+    CARD_VALUE_BORDER_DARK,
+    CARD_VALUE_BG_LIGHT,
+    CARD_VALUE_BORDER_LIGHT,
+    DIALOG_BORDER_DARK,
+    DIALOG_BORDER_LIGHT,
+    DIALOG_TEXT_DARK,
+    DIALOG_TEXT_LIGHT,
+    DIALOG_NOTE_DARK,
+    DIALOG_NOTE_LIGHT,
+    SIG_POOR,
+    SIG_WEAK,
+    SIG_FAIR,
+    SIG_EXCELLENT,
+    SEC_BAD,
+    SEC_WPA2,
+    SEC_WPA3,
+    SEC_OTHER,
+    PMF_OPTIONAL,
+    MENU_BG,
+    MENU_BORDER,
+    MENU_TEXT,
+    MENU_SELECTED,
+    CONNECTED_GREEN,
+    HTML_MUTED,
+    FALLBACK_GRAY,
 )
 
 
@@ -383,7 +406,9 @@ class MainWindowLogicMixin:
                 is_dark = sp.color(QPalette.ColorRole.Window).lightness() < 128
             app.setPalette(_dark_palette() if is_dark else _light_palette())
             plot_bg, plot_fg = (
-                (GRAPH_BG_DARK, GRAPH_FG_DARK) if is_dark else (GRAPH_BG_LIGHT, GRAPH_FG_LIGHT)
+                (GRAPH_BG_DARK, GRAPH_FG_DARK)
+                if is_dark
+                else (GRAPH_BG_LIGHT, GRAPH_FG_LIGHT)
             )
         pg.setConfigOptions(foreground=plot_fg, background=plot_bg)
         self._channel_graph.set_theme(plot_bg, plot_fg)
@@ -430,8 +455,12 @@ class MainWindowLogicMixin:
             "}"
         )
 
+        # Clear before re-applying — forces Qt6 to flush cached child-widget
+        # styles so property selectors (e.g. [detailRole='value']) re-evaluate.
+        self._details_widget.setStyleSheet("")
         self._details_widget.setStyleSheet(details_style)
         if hasattr(self, "_connection_widget"):
+            self._connection_widget.setStyleSheet("")
             self._connection_widget.setStyleSheet(details_style)
 
     def _on_error(self, msg: str):
