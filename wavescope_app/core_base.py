@@ -107,7 +107,7 @@ from .theme import SSID_COLORS
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
