@@ -65,7 +65,6 @@ from .theme import (
     ALLOC_6G_U6,
     ALLOC_6G_U7,
     ALLOC_6G_U8,
-    vidal0,
 )
 
 

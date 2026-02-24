@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.2 — 2026-02-24
+
+### Fixes
+- Fixed GNOME launcher icon not appearing due to conflicting user-level and system-level `.desktop` files; `install.sh` no longer creates a user-level entry when the `.deb` is installed.
+- Fixed generic dock icon when launching from CLI by setting `GIO_LAUNCHED_DESKTOP_FILE` in the launcher script, allowing GNOME to correctly associate the running process with its `.desktop` entry.
+- Fixed DBus portal error (`Connection already associated with an application ID`) by calling `setDesktopFileName` before `setApplicationName` in the Qt application setup.
+- Fixed `.deb` postinst/postrm icon cache update failing silently on systems without `gtk-update-icon-cache`; now falls back to `gtk4-update-icon-cache` and `update-icon-caches`.
+
 ## v1.8.1 — 2026-02-24
 
 ### Fixes

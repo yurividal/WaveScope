@@ -31,12 +31,16 @@ echo "▸ Installing Python packages…"
 "$VENV/bin/pip" install --upgrade pip -q
 "$VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt" -q
 
-printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\nexec .venv/bin/python main.py "$@"\n' > "$SCRIPT_DIR/wavescope"
+printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\nexport GIO_LAUNCHED_DESKTOP_FILE="$HOME/.local/share/applications/wavescope.desktop"\nexport GIO_LAUNCHED_DESKTOP_FILE_PID=$$\nexec .venv/bin/python main.py "$@"\n' > "$SCRIPT_DIR/wavescope"
 chmod +x "$SCRIPT_DIR/wavescope"
 
 DESKTOP_DIR="$HOME/.local/share/applications"
-mkdir -p "$DESKTOP_DIR"
-cat > "$DESKTOP_DIR/wavescope.desktop" << DESKEOF
+# Only install the user-level desktop file when NOT installed via .deb (which
+# puts the authoritative entry in /usr/share/applications).  A user-level file
+# shadows the system one and would point to the wrong launcher after a .deb install.
+if ! [ -f /usr/share/applications/wavescope.desktop ]; then
+    mkdir -p "$DESKTOP_DIR"
+    cat > "$DESKTOP_DIR/wavescope.desktop" << DESKEOF
 [Desktop Entry]
 Name=WaveScope
 Comment=Modern WiFi Analyzer for Linux
@@ -48,7 +52,8 @@ Categories=Network;Utility;
 Keywords=wifi;wireless;network;
 StartupWMClass=wavescope
 DESKEOF
-update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+    update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

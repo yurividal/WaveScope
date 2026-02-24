@@ -19,11 +19,15 @@ from wavescope_app.theme import _dark_palette, GRAPH_BG_DARK, GRAPH_AXIS_DARK
 
 def main():
     # ── Pyqtgraph config must come before QApplication ─────────────────────
-    pg.setConfigOptions(antialias=True, foreground=GRAPH_AXIS_DARK, background=GRAPH_BG_DARK)
+    pg.setConfigOptions(
+        antialias=True, foreground=GRAPH_AXIS_DARK, background=GRAPH_BG_DARK
+    )
 
     app = QApplication(sys.argv)
-    app.setApplicationName(APP_NAME)
+    # setDesktopFileName must come before setApplicationName / setOrganizationName
+    # to avoid the portal "Connection already associated with an application ID" error.
     app.setDesktopFileName("wavescope")  # GNOME dock grouping / WM_CLASS hint
+    app.setApplicationName(APP_NAME)
     app.setOrganizationName("wavescope")
     app.setStyle("Fusion")
 
