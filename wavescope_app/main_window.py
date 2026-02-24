@@ -21,7 +21,7 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         # Cache for fields that must never regress to 0 / "" / None once known
         self._sticky_cache: Dict[str, dict] = {}  # bssid.lower() → {field: last_good}
         self._conn_counter_prev: Dict[str, Dict[str, int]] = {}
-        self._scanner = WiFiScanner(interval_sec=2, linger_secs=120.0)
+        self._scanner = WiFiScanner(interval_sec=2, linger_secs=60.0)
         self._scanner.data_ready.connect(self._on_data)
         self._scanner.scan_error.connect(self._on_error)
 

@@ -49,7 +49,7 @@ class MainWindowUIMixin:
         tb.addWidget(QLabel("  Linger: "))
         self._linger_spin = QSpinBox()
         self._linger_spin.setRange(0, 600)
-        self._linger_spin.setValue(120)
+        self._linger_spin.setValue(60)
         self._linger_spin.setSuffix(" s")
         self._linger_spin.setMinimumWidth(65)
         self._linger_spin.setToolTip(
