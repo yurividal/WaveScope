@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/main.py" | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
+VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/wavescope_app/core_base.py" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')}" 
 ARCH="all"
 PKGNAME="wavescope"
 BUILD_DIR="$REPO_ROOT/_deb_build"
@@ -29,6 +29,7 @@ mkdir -p \
 
 # ── 2. Copy application files ─────────────────────────────────────────────────
 cp "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$INSTALL_DIR/"
+cp -r "$REPO_ROOT/wavescope_app" "$INSTALL_DIR/"
 cp "$REPO_ROOT/assets/icon.svg" "$INSTALL_DIR/assets/"
 [[ -f "$REPO_ROOT/assets/screenshot.png" ]] && cp "$REPO_ROOT/assets/screenshot.png" "$INSTALL_DIR/assets/"
 

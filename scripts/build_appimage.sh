@@ -7,7 +7,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/main.py" | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
+VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/wavescope_app/core_base.py" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')}" 
 APP_ID="wavescope"
 APP_NAME="WaveScope"
 ARCH="$(uname -m)"
@@ -40,7 +40,7 @@ mkdir -p \
     "$PY_RUNTIME/lib64"
 
 # ── 2. Copy application files ───────────────────────────────────────────────
-cp -a "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$REPO_ROOT/assets" "$APP_PREFIX/"
+cp -a "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$REPO_ROOT/assets" "$REPO_ROOT/wavescope_app" "$APP_PREFIX/"
 [ -f "$REPO_ROOT/LICENSE" ] && cp "$REPO_ROOT/LICENSE" "$APP_PREFIX/" || true
 [ -f "$REPO_ROOT/README.md" ] && cp "$REPO_ROOT/README.md" "$APP_PREFIX/" || true
 

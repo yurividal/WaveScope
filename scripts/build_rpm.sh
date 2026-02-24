@@ -10,7 +10,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/main.py" | grep -oP '"[0-9]+\.[0-9]+\.[0-9]+"' | tr -d '"')}"
+VERSION="${1:-$(grep -m1 'VERSION' "$REPO_ROOT/wavescope_app/core_base.py" | grep -oP '[0-9]+\.[0-9]+\.[0-9]+')}" 
 PKGNAME="wavescope"
 RPM_BUILD_DIR="$REPO_ROOT/_rpm_build"
 TARBALL_NAME="${PKGNAME}-${VERSION}"
@@ -32,6 +32,7 @@ mkdir -p \
 STAGING="$RPM_BUILD_DIR/$TARBALL_NAME"
 mkdir -p "$STAGING/assets"
 cp "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$STAGING/"
+cp -r "$REPO_ROOT/wavescope_app" "$STAGING/"
 cp "$REPO_ROOT/assets/icon.svg" "$STAGING/assets/"
 [ -f "$REPO_ROOT/assets/screenshot.png" ] && cp "$REPO_ROOT/assets/screenshot.png" "$STAGING/assets/" || true
 tar -czf "$RPM_BUILD_DIR/SOURCES/${TARBALL_NAME}.tar.gz" \
@@ -77,6 +78,7 @@ Requires NetworkManager (nmcli) and iw for full functionality.
 %install
 install -dm 755 %{buildroot}/opt/wavescope/assets
 install -pm 644 main.py requirements.txt %{buildroot}/opt/wavescope/
+cp -r wavescope_app %{buildroot}/opt/wavescope/
 install -pm 644 assets/icon.svg %{buildroot}/opt/wavescope/assets/
 if [ -f assets/screenshot.png ]; then
     install -pm 644 assets/screenshot.png %{buildroot}/opt/wavescope/assets/
@@ -130,6 +132,7 @@ fi
 %files
 /opt/wavescope/main.py
 /opt/wavescope/requirements.txt
+/opt/wavescope/wavescope_app/
 /opt/wavescope/assets/icon.svg
 /usr/bin/wavescope
 /usr/share/applications/wavescope.desktop
