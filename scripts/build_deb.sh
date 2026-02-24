@@ -109,8 +109,7 @@ chmod 0755 "$DEB_ROOT/DEBIAN/postinst" "$DEB_ROOT/DEBIAN/prerm"
 # ── 10. Build the .deb ───────────────────────────────────────────────────────
 dpkg-deb --build --root-owner-group "$DEB_ROOT"
 DEB_FILE="${PKGNAME}_${VERSION}_${ARCH}.deb"
-mv "${DEB_ROOT}.deb" "./$DEB_FILE"
-mv -f "./$DEB_FILE" "$REPO_ROOT/$DEB_FILE"
+mv -f "${DEB_ROOT}.deb" "$REPO_ROOT/$DEB_FILE"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
