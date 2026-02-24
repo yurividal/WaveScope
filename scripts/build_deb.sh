@@ -122,7 +122,8 @@ cp "$REPO_ROOT/assets/icon.svg" "$DEB_ROOT/usr/share/icons/hicolor/scalable/apps
 
 # ── 9. Fix permissions ───────────────────────────────────────────────────────
 find "$DEB_ROOT" -type d -exec chmod 0755 {} \;
-find "$DEB_ROOT/opt" -type f -exec chmod 0644 {} \;
+find "$DEB_ROOT" -type f -exec chmod 0644 {} \;   # covers /opt AND /usr/share
+chmod 0755 "$DEB_ROOT/usr/bin/wavescope"
 chmod 0755 "$DEB_ROOT/DEBIAN/postinst" "$DEB_ROOT/DEBIAN/prerm" "$DEB_ROOT/DEBIAN/postrm"
 
 # ── 10. Build the .deb ───────────────────────────────────────────────────────
