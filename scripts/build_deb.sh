@@ -67,6 +67,13 @@ python3 -m venv "$VENV"
     "pyqtgraph>=0.13.0" \
     "numpy>=1.23.0"
 echo "✓ WaveScope ready. Run: wavescope"
+# Refresh desktop and icon caches so GNOME/KDE launchers pick up the entry
+if command -v update-desktop-database &>/dev/null; then
+    update-desktop-database /usr/share/applications
+fi
+if command -v gtk-update-icon-cache &>/dev/null; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor
+fi
 EOF
 chmod 0755 "$DEB_ROOT/DEBIAN/postinst"
 
@@ -76,6 +83,18 @@ cat > "$DEB_ROOT/DEBIAN/prerm" <<'EOF'
 rm -rf /opt/wavescope/.venv
 EOF
 chmod 0755 "$DEB_ROOT/DEBIAN/prerm"
+
+# ── 5b. DEBIAN/postrm — refresh caches after uninstall ───────────────────────
+cat > "$DEB_ROOT/DEBIAN/postrm" <<'EOF'
+#!/usr/bin/env bash
+if command -v update-desktop-database &>/dev/null; then
+    update-desktop-database /usr/share/applications
+fi
+if command -v gtk-update-icon-cache &>/dev/null; then
+    gtk-update-icon-cache -f -t /usr/share/icons/hicolor
+fi
+EOF
+chmod 0755 "$DEB_ROOT/DEBIAN/postrm"
 
 # ── 6. /usr/bin/wavescope launcher ───────────────────────────────────────────
 cat > "$DEB_ROOT/usr/bin/wavescope" <<'EOF'
@@ -104,7 +123,7 @@ cp "$REPO_ROOT/assets/icon.svg" "$DEB_ROOT/usr/share/icons/hicolor/scalable/apps
 # ── 9. Fix permissions ───────────────────────────────────────────────────────
 find "$DEB_ROOT" -type d -exec chmod 0755 {} \;
 find "$DEB_ROOT/opt" -type f -exec chmod 0644 {} \;
-chmod 0755 "$DEB_ROOT/DEBIAN/postinst" "$DEB_ROOT/DEBIAN/prerm"
+chmod 0755 "$DEB_ROOT/DEBIAN/postinst" "$DEB_ROOT/DEBIAN/prerm" "$DEB_ROOT/DEBIAN/postrm"
 
 # ── 10. Build the .deb ───────────────────────────────────────────────────────
 dpkg-deb --build --root-owner-group "$DEB_ROOT"
