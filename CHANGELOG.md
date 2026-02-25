@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.3 — 2026-02-25
+
+### Fixes
+- Fixed vendor icons missing in `.deb` builds; `build_deb.sh` now copies the full `assets/` directory (including `vendor-icons/`, `vendors.json`, and `vendor_urls.json`) instead of only `icon.svg`.
+
 ## v1.8.2 — 2026-02-24
 
 ### Fixes

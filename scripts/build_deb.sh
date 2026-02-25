@@ -30,8 +30,7 @@ mkdir -p \
 # ── 2. Copy application files ─────────────────────────────────────────────────
 cp "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$INSTALL_DIR/"
 cp -r "$REPO_ROOT/wavescope_app" "$INSTALL_DIR/"
-cp "$REPO_ROOT/assets/icon.svg" "$INSTALL_DIR/assets/"
-[[ -f "$REPO_ROOT/assets/screenshot.png" ]] && cp "$REPO_ROOT/assets/screenshot.png" "$INSTALL_DIR/assets/"
+cp -r "$REPO_ROOT/assets/." "$INSTALL_DIR/assets/"
 
 # ── 3. DEBIAN/control ────────────────────────────────────────────────────────
 cat > "$DEB_ROOT/DEBIAN/control" <<EOF
@@ -71,13 +70,8 @@ echo "✓ WaveScope ready. Run: wavescope"
 if command -v update-desktop-database &>/dev/null; then
     update-desktop-database /usr/share/applications
 fi
-# Try multiple tools — availability varies across distros
 if command -v gtk-update-icon-cache &>/dev/null; then
     gtk-update-icon-cache -f -t /usr/share/icons/hicolor
-elif command -v gtk4-update-icon-cache &>/dev/null; then
-    gtk4-update-icon-cache -f -t /usr/share/icons/hicolor
-elif command -v update-icon-caches &>/dev/null; then
-    update-icon-caches /usr/share/icons/hicolor
 fi
 EOF
 chmod 0755 "$DEB_ROOT/DEBIAN/postinst"
@@ -95,13 +89,8 @@ cat > "$DEB_ROOT/DEBIAN/postrm" <<'EOF'
 if command -v update-desktop-database &>/dev/null; then
     update-desktop-database /usr/share/applications
 fi
-# Try multiple tools — availability varies across distros
 if command -v gtk-update-icon-cache &>/dev/null; then
     gtk-update-icon-cache -f -t /usr/share/icons/hicolor
-elif command -v gtk4-update-icon-cache &>/dev/null; then
-    gtk4-update-icon-cache -f -t /usr/share/icons/hicolor
-elif command -v update-icon-caches &>/dev/null; then
-    update-icon-caches /usr/share/icons/hicolor
 fi
 EOF
 chmod 0755 "$DEB_ROOT/DEBIAN/postrm"
@@ -109,8 +98,6 @@ chmod 0755 "$DEB_ROOT/DEBIAN/postrm"
 # ── 6. /usr/bin/wavescope launcher ───────────────────────────────────────────
 cat > "$DEB_ROOT/usr/bin/wavescope" <<'EOF'
 #!/usr/bin/env bash
-export GIO_LAUNCHED_DESKTOP_FILE=/usr/share/applications/wavescope.desktop
-export GIO_LAUNCHED_DESKTOP_FILE_PID=$$
 exec /opt/wavescope/.venv/bin/python /opt/wavescope/main.py "$@"
 EOF
 chmod 0755 "$DEB_ROOT/usr/bin/wavescope"
