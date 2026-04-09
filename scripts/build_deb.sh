@@ -60,8 +60,8 @@ set -e
 VENV="/opt/wavescope/.venv"
 echo "▸ Setting up Python environment for WaveScope…"
 python3 -m venv "$VENV"
-"$VENV/bin/pip" install --upgrade pip -q
-"$VENV/bin/pip" install --quiet \
+"$VENV/bin/pip" install --upgrade pip
+"$VENV/bin/pip" install \
     "PyQt6>=6.4.0" \
     "pyqtgraph>=0.13.0" \
     "numpy>=1.23.0"
