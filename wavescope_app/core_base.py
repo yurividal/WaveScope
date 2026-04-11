@@ -233,7 +233,7 @@ from .theme import (
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.8.3"
+VERSION = "1.8.4"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep

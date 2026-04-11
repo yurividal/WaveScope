@@ -59,7 +59,7 @@ The installer will automatically create a Python virtual environment and install
 **System dependencies** (installed automatically as `.deb` dependencies):
 ```
 python3 (≥3.10), python3-pip, python3-venv,
-network-manager, iw, tcpdump, policykit-1,
+network-manager, iw, tcpdump, polkit,
 libxcb-cursor0, libxcb-xinerama0, libxcb-randr0
 ```
 
@@ -76,7 +76,6 @@ wavescope
 
 **System dependencies** (installed automatically as `.rpm` dependencies):
 ```
-python3 (≥3.10), python3-pip,
 NetworkManager, iw, tcpdump, polkit, xcb-util-cursor
 ```
 
@@ -162,7 +161,7 @@ chmod +x WaveScope-*.AppImage
 - `nmcli` — provided by `network-manager`
 - `iw` — for enriched scan data (WiFi generation, exact dBm, BSS load, etc.)
 - `tcpdump` — required for packet capture (Monitor & Managed modes)
-- `pkexec` — provided by `policykit-1`; used for root privilege during packet capture
+- `pkexec` — from `policykit` or `policykit-1` package; required for root privilege during packet capture
 
 ### Python packages (auto-installed by installer or `.deb`)
 - `PyQt6 >= 6.4.0`
