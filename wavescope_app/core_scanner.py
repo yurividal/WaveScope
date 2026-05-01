@@ -343,6 +343,28 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         else:
             d["pmf"] = "No"
 
+        # ── Cisco AP system name (IE 133 / element ID 0x85) ────────────────
+        # Format: <8-byte header> 0x40 <ASCII name> 0x00 …
+        # iw -u outputs it as: Unknown IE (133): xx xx xx xx xx xx xx xx 40 <hex name> …
+        cisco_ie_m = re.search(
+            r"Unknown IE \(133\):\s*([0-9a-f ]+)", text, re.IGNORECASE
+        )
+        if cisco_ie_m:
+            try:
+                raw = bytes.fromhex(cisco_ie_m.group(1).replace(" ", ""))
+                # Find the 0x40 marker that precedes the AP name
+                idx = raw.find(0x40)
+                if idx != -1 and idx + 1 < len(raw):
+                    name_bytes = raw[idx + 1 :]
+                    # Terminate at first null or non-printable; strip trailing commas/spaces
+                    name = "".join(
+                        chr(b) for b in name_bytes if 32 <= b < 127
+                    ).rstrip(" ,\x00")
+                    if name:
+                        d["ap_name"] = name
+            except Exception:
+                pass
+
         # ── WPS manufacturer hint (often reveals branded vendor on LAA MACs) ──
         wps_manuf_m = re.search(r"(?im)^\s*\*\s*Manufacturer:\s*(.+?)\s*$", text)
         if wps_manuf_m:
@@ -635,6 +657,21 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
         if res.returncode != 0:
             return
         iw_data = parse_iw_scan(res.stdout)
+
+        # Second pass with -u to get undecoded IEs (e.g. Cisco IE 133 AP name).
+        # Run separately because -u suppresses some decoded output (e.g. BSS Load).
+        # Note: -u must come after the subcommands: iw dev <iface> scan dump -u
+        res_u = subprocess.run(
+            ["iw", "dev", iface, "scan", "dump", "-u"],
+            capture_output=True,
+            text=True,
+            timeout=6,
+        )
+        if res_u.returncode == 0:
+            iw_data_u = parse_iw_scan(res_u.stdout)
+            for bssid, d_u in iw_data_u.items():
+                if "ap_name" in d_u:
+                    iw_data.setdefault(bssid, {})["ap_name"] = d_u["ap_name"]
         conn_data = _get_connected_link_metrics(iface)
         conn_bssid = str(conn_data.get("conn_bssid", "")).lower()
         for ap in aps:
@@ -662,6 +699,7 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 "vendor_ie_ouis",
                 "phy_cap_summary",
                 "he_eht_features",
+                "ap_name",
             ):
                 if attr in d:
                     setattr(ap, attr, d[attr])
@@ -939,6 +977,7 @@ TABLE_HEADERS = [
     "Ch.Util%",
     "Clients",
     "Roaming",
+    "AP Name",
 ]
 
 COL_INUSE = 0
@@ -960,3 +999,4 @@ COL_GEN = 15  # WiFi generation (WiFi 4/5/6/6E/7)
 COL_UTIL = 16  # Channel utilisation %  (BSS Load)
 COL_CLIENTS = 17  # Station count          (BSS Load)
 COL_KVR = 18  # 802.11k/v/r roaming flags
+COL_APNAME = 19  # Cisco AP system name (IE 133, vendor-optional)

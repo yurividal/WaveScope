@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.5 — 2026-05-01
+
+### New Features
+- **Cisco AP Name** — WaveScope now decodes the Cisco proprietary IE 133 present in beacons broadcast by Cisco/Meraki access points. When available, the physical AP system name (e.g. `SDA-Hall-B1-34-`) is shown in a new **AP Name** column in the main table and as a dedicated **AP Name** row in the Details panel. The column is hidden automatically when no APs in the current scan advertise this IE, and appears as soon as at least one name is resolved.
+
 ## v1.8.3 — 2026-02-25
 
 ### Fixes

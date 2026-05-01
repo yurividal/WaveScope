@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+cd "$(dirname "$0")"
+export GIO_LAUNCHED_DESKTOP_FILE="$HOME/.local/share/applications/wavescope.desktop"
+export GIO_LAUNCHED_DESKTOP_FILE_PID=$$
+exec .venv/bin/python main.py "$@"

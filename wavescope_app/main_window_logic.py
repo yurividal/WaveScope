@@ -160,6 +160,7 @@ class MainWindowLogicMixin:
         "vendor_ie_ouis",
         "phy_cap_summary",
         "he_eht_features",
+        "ap_name",
         "conn_iface",
         "conn_link_ssid",
         "conn_link_freq_mhz",
@@ -367,6 +368,10 @@ class MainWindowLogicMixin:
         self._history_graph.set_ssid_colors(self._model.ssid_colors())
         self._history_graph.push(aps)
         self._auto_size_table_columns()
+
+        # Show AP Name column only when at least one AP has a name resolved
+        any_ap_name = any(ap.ap_name for ap in aps)
+        self._table.setColumnHidden(COL_APNAME, not any_ap_name)
 
         total = len(aps)
         shown = self._proxy.rowCount()
@@ -997,6 +1002,8 @@ class MainWindowLogicMixin:
             str(ap.station_count) if ap.station_count is not None else dim("Unknown")
         )
         v["roaming"].setText(kvr_html)
+        if "ap_name" in v:
+            v["ap_name"].setText(ap.ap_name or dim("Not advertised"))
 
     def _show_connection(self):
         def dim(text):

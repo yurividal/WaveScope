@@ -42,6 +42,7 @@ class AccessPoint:
     vendor_ie_ouis: str = ""  # Vendor-specific IE OUIs seen in beacon
     phy_cap_summary: str = ""  # HT/VHT/HE/EHT families + max width summary
     he_eht_features: str = ""  # HE/EHT extras (BSS color, TWT, spatial reuse)
+    ap_name: str = ""  # Cisco AP system name from proprietary IE 133 (if advertised)
     # ── Connected-session telemetry (iw link / iw station dump) ────────────
     conn_iface: str = ""
     conn_link_ssid: str = ""

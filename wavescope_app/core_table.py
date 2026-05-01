@@ -184,6 +184,8 @@ class APTableModel(QAbstractTableModel):
             return str(ap.station_count) if ap.station_count is not None else ""
         if col == COL_KVR:
             return ap.kvr_flags
+        if col == COL_APNAME:
+            return ap.ap_name
         return ""
 
     def ap_at(self, row: int) -> Optional[AccessPoint]:
@@ -255,6 +257,7 @@ class APFilterProxy(QSortFilterProxyModel):
         COL_SEC: "Security",
         COL_GEN: "Gen",
         COL_KVR: "Roaming",
+        COL_APNAME: "AP Name",
     }
 
     def active_filter_text(self) -> str:
