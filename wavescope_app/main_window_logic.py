@@ -161,6 +161,7 @@ class MainWindowLogicMixin:
         "phy_cap_summary",
         "he_eht_features",
         "ap_name",
+        "cisco_tx_power_dbm",
         "conn_iface",
         "conn_link_ssid",
         "conn_link_freq_mhz",
@@ -198,8 +199,12 @@ class MainWindowLogicMixin:
 
     def _auto_size_table_columns(self):
         """
-        Fit all table columns to visible content/header, then distribute any
-        remaining horizontal space across all columns so the table fills width.
+        Fit all table columns to visible content/header.
+
+        If the table is narrower than the viewport, distribute the extra space
+        across columns so it still fills cleanly. If the content is wider than
+        the viewport, keep the natural widths and let the horizontal scrollbar
+        handle the overflow instead of compressing columns.
         """
         model = self._table.model()
         if model is None:
@@ -239,11 +244,6 @@ class MainWindowLogicMixin:
             required.append(max(min_w, w))
 
         widths = required[:]
-        total = sum(widths)
-
-        if total > viewport_w and total > 0:
-            scale = viewport_w / total
-            widths = [max(min_w, int(w * scale)) for w in widths]
 
         # If there's remaining room, distribute it across all columns
         total = sum(widths)
@@ -261,24 +261,6 @@ class MainWindowLogicMixin:
                 )
                 for i in range(rem):
                     widths[order[i % col_count]] += 1
-
-        # If rounding/scaling left us too wide, trim proportionally (not one column)
-        total = sum(widths)
-        if total > viewport_w:
-            over = total - viewport_w
-            while over > 0:
-                changed = False
-                for i in sorted(
-                    range(col_count), key=lambda k: widths[k], reverse=True
-                ):
-                    if widths[i] > min_w:
-                        widths[i] -= 1
-                        over -= 1
-                        changed = True
-                        if over == 0:
-                            break
-                if not changed:
-                    break
 
         self._suspend_col_resize_tracking = True
         try:
@@ -372,6 +354,8 @@ class MainWindowLogicMixin:
         # Show AP Name column only when at least one AP has a name resolved
         any_ap_name = any(ap.ap_name for ap in aps)
         self._table.setColumnHidden(COL_APNAME, not any_ap_name)
+        any_cisco_pwr = any(ap.cisco_tx_power_dbm is not None for ap in aps)
+        self._table.setColumnHidden(COL_CISCO_PWR, not any_cisco_pwr)
 
         total = len(aps)
         shown = self._proxy.rowCount()
@@ -1004,6 +988,12 @@ class MainWindowLogicMixin:
         v["roaming"].setText(kvr_html)
         if "ap_name" in v:
             v["ap_name"].setText(ap.ap_name or dim("Not advertised"))
+        if "cisco_tx_power" in v:
+            v["cisco_tx_power"].setText(
+                f"{ap.cisco_tx_power_dbm} dBm"
+                if ap.cisco_tx_power_dbm is not None
+                else dim("Not advertised")
+            )
 
     def _show_connection(self):
         def dim(text):

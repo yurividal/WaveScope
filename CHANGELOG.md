@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.7 — 2026-05-01
+
+### New Features
+- Added Ubiquiti AP-name detection from vendor-specific IE 221 (OUI `00:15:6d`, type `0x01`) in the `iw -u` enrichment path, feeding the existing **AP Name** field.
+- Added Cisco **Power Level** parsing from IE 150 and surfaced it in both the table (auto-shown when present) and Details panel, with `dBm` units.
+
+### Improvements
+- Updated table sizing behavior to preserve natural column widths on narrow windows and rely on horizontal scrolling instead of compressing/cropping columns.
+
 ## v1.8.6 — 2026-05-01
 
 ### Fixes

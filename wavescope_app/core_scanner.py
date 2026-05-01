@@ -365,6 +365,59 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             except Exception:
                 pass
 
+        # ── Ubiquiti AP name (Vendor-specific IE 221 / OUI 00:15:6d) ──────
+        # WiFi Explorer shows this as Element ID 221, OUI 00:15:6D, Type 1.
+        # In iw -u this appears as a decoded vendor-specific line:
+        #   Vendor specific: OUI 00:15:6d, data: 01 <name-bytes...>
+        if not d.get("ap_name"):
+            ubnt_matches = re.findall(
+                r"Vendor\s+specific:\s*OUI\s*00:15:6d,\s*data:\s*([0-9a-f ]+)",
+                text,
+                re.IGNORECASE,
+            )
+            for hex_data in ubnt_matches:
+                try:
+                    raw = bytes.fromhex(hex_data.replace(" ", ""))
+                except Exception:
+                    continue
+
+                if not raw:
+                    continue
+
+                name_bytes: bytes
+                if raw[0] != 0x01:
+                    continue
+
+                # Some firmware encodes [type][len][value...]
+                if len(raw) >= 3 and raw[1] == len(raw) - 2:
+                    name_bytes = raw[2:]
+                # Most common observed format: [type=0x01][ascii-name...]
+                else:
+                    name_bytes = raw[1:]
+
+                # Keep printable ASCII; stop at first NUL if present.
+                if b"\x00" in name_bytes:
+                    name_bytes = name_bytes.split(b"\x00", 1)[0]
+                name = "".join(chr(b) for b in name_bytes if 32 <= b < 127).strip()
+                if len(name) >= 3:
+                    d["ap_name"] = name
+                    break
+
+        # ── Cisco beacon radio power (IE 150) ──────────────────────────────
+        # iw -u exposes Cisco's proprietary IE 150 as:
+        #   Unknown IE (150): 00 40 96 00 XX 00
+        # where XX matches the AP's beacon/TPC transmit power in dBm.
+        cisco_pwr_m = re.search(
+            r"Unknown IE \(150\):\s*([0-9a-f ]+)", text, re.IGNORECASE
+        )
+        if cisco_pwr_m:
+            try:
+                raw = bytes.fromhex(cisco_pwr_m.group(1).replace(" ", ""))
+                if len(raw) >= 6 and raw[:4] == bytes([0x00, 0x40, 0x96, 0x00]):
+                    d["cisco_tx_power_dbm"] = int(raw[4])
+            except Exception:
+                pass
+
         # ── WPS manufacturer hint (often reveals branded vendor on LAA MACs) ──
         wps_manuf_m = re.search(r"(?im)^\s*\*\s*Manufacturer:\s*(.+?)\s*$", text)
         if wps_manuf_m:
@@ -672,6 +725,10 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
             for bssid, d_u in iw_data_u.items():
                 if "ap_name" in d_u:
                     iw_data.setdefault(bssid, {})["ap_name"] = d_u["ap_name"]
+                if "cisco_tx_power_dbm" in d_u:
+                    iw_data.setdefault(bssid, {})["cisco_tx_power_dbm"] = d_u[
+                        "cisco_tx_power_dbm"
+                    ]
         conn_data = _get_connected_link_metrics(iface)
         conn_bssid = str(conn_data.get("conn_bssid", "")).lower()
         for ap in aps:
@@ -700,6 +757,7 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 "phy_cap_summary",
                 "he_eht_features",
                 "ap_name",
+                "cisco_tx_power_dbm",
             ):
                 if attr in d:
                     setattr(ap, attr, d[attr])
@@ -978,6 +1036,7 @@ TABLE_HEADERS = [
     "Clients",
     "Roaming",
     "AP Name",
+    "Power Level",
 ]
 
 COL_INUSE = 0
@@ -1000,3 +1059,4 @@ COL_UTIL = 16  # Channel utilisation %  (BSS Load)
 COL_CLIENTS = 17  # Station count          (BSS Load)
 COL_KVR = 18  # 802.11k/v/r roaming flags
 COL_APNAME = 19  # Cisco AP system name (IE 133, vendor-optional)
+COL_CISCO_PWR = 20  # Cisco beacon radio power from IE 150, in dBm

@@ -187,11 +187,13 @@ class MainWindowUIMixin:
             COL_CLIENTS: 62,
             COL_KVR: 56,
             COL_APNAME: 160,
+            COL_CISCO_PWR: 76,
         }
         for col, w in _col_widths.items():
             self._table.setColumnWidth(col, w)
         # AP Name column starts hidden; revealed dynamically in _on_data
         self._table.setColumnHidden(COL_APNAME, True)
+        self._table.setColumnHidden(COL_CISCO_PWR, True)
         # Track columns the user has manually resized — skip auto-fit for those
         self._user_sized_cols: set = set()
         hdr.sectionResized.connect(self._on_col_resized)
@@ -264,6 +266,7 @@ class MainWindowUIMixin:
         _DET_ROWS = [
             "bssid",
             "ap_name",
+            "cisco_tx_power",
             "manufacturer",
             "wifi_gen",
             "mode_80211",
@@ -293,6 +296,7 @@ class MainWindowUIMixin:
         _DET_LABELS = [
             "BSSID (AP MAC, 48-bit)",
             "AP Name",
+            "Power Level",
             "Manufacturer",
             "WiFi Generation",
             "802.11 PHY / Amendment",
@@ -323,6 +327,7 @@ class MainWindowUIMixin:
         _DET_LEFT_KEYS = [
             "bssid",
             "ap_name",
+            "cisco_tx_power",
             "manufacturer",
             "wifi_gen",
             "mode_80211",

@@ -122,6 +122,7 @@ class APTableModel(QAbstractTableModel):
                 COL_RATE,
                 COL_UTIL,
                 COL_CLIENTS,
+                COL_CISCO_PWR,
             }
             if col in numeric_cols or col == COL_KVR or col == COL_COUNTRY:
                 return Qt.AlignmentFlag.AlignCenter
@@ -186,6 +187,12 @@ class APTableModel(QAbstractTableModel):
             return ap.kvr_flags
         if col == COL_APNAME:
             return ap.ap_name
+        if col == COL_CISCO_PWR:
+            return (
+                f"{ap.cisco_tx_power_dbm} dBm"
+                if ap.cisco_tx_power_dbm is not None
+                else ""
+            )
         return ""
 
     def ap_at(self, row: int) -> Optional[AccessPoint]:
@@ -258,6 +265,7 @@ class APFilterProxy(QSortFilterProxyModel):
         COL_GEN: "Gen",
         COL_KVR: "Roaming",
         COL_APNAME: "AP Name",
+        COL_CISCO_PWR: "Power Level",
     }
 
     def active_filter_text(self) -> str:
@@ -307,6 +315,7 @@ class APFilterProxy(QSortFilterProxyModel):
             COL_RATE,
             COL_UTIL,
             COL_CLIENTS,
+            COL_CISCO_PWR,
         }
         lv = self.sourceModel().data(left, Qt.ItemDataRole.DisplayRole)
         rv = self.sourceModel().data(right, Qt.ItemDataRole.DisplayRole)
