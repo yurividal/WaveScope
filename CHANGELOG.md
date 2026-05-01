@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.8.6 — 2026-05-01
+
+### Fixes
+- Fixed `.deb` installation dependency resolution on newer Ubuntu releases by updating the PolicyKit dependency alternatives in `build_deb.sh` to include currently installable package names (`polkitd`/`pkexec`) while preserving compatibility alternatives.
+
 ## v1.8.5 — 2026-05-01
 
 ### New Features
