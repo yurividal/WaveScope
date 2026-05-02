@@ -191,6 +191,8 @@ class MainWindowLogicMixin:
     # Fields where 0 / "" / None means "parse failed" — once we get a real
     # value the last-good value is kept even if subsequent cycles return 0.
     _STICKY_NONZERO_FIELDS = (
+        "channel",  # nmcli returns 0 for some channels (e.g. ch144/5720 MHz)
+        "freq_mhz",  # keep last-good freq so band/channel never regress to 0
         "bandwidth_mhz",  # nmcli returns 0 for 6 GHz
         "rate_mbps",  # nmcli returns 0 for 6 GHz
         "wifi_gen",  # may be "" when iw scan cache is stale
@@ -376,6 +378,30 @@ class MainWindowLogicMixin:
         modes = ["dark", "light", "auto"]
         self._apply_theme(modes[idx])
 
+    def _apply_tb_theme(self, is_dark: bool) -> None:
+        """Re-style the toolbar pill groups for dark/light mode."""
+        if is_dark:
+            bg, bdr, lbl_c = "#0a1520", "#1c2e44", "#3a5880"
+        else:
+            bg, bdr, lbl_c = "#e8eff8", "#b8cce0", "#7090b0"
+
+        frame_ss = (
+            f"QFrame#tbGroup {{ background:{bg};"
+            f" border:1px solid {bdr}; border-radius:6px; }}"
+        )
+        lbl_ss = (
+            f"color:{lbl_c}; font-size:7pt; font-weight:700;"
+            " letter-spacing:0.5px; border:none; background:transparent;"
+        )
+        for frame in self._tb_groups:
+            frame.setStyleSheet(frame_ss)
+            hdr = frame.findChild(QLabel, "tbGroupHeader")
+            if hdr:
+                hdr.setStyleSheet(lbl_ss)
+            for div in frame.findChildren(QFrame):
+                if div.frameShape() == QFrame.Shape.VLine:
+                    div.setStyleSheet(f"background:{bdr}; border:none;")
+
     def _apply_theme(self, mode: str):
         app = QApplication.instance()
         if mode == "dark":
@@ -407,6 +433,8 @@ class MainWindowLogicMixin:
         self._channel_graph.set_theme(plot_bg, plot_fg)
         self._history_graph.set_theme(plot_bg, plot_fg)
         self._apply_details_theme(is_dark)
+        self._apply_tb_theme(is_dark)
+        self._ap_sidebar.apply_theme(is_dark)
         if hasattr(self, "_alloc_dialog") and self._alloc_dialog is not None:
             self._alloc_dialog.sync_theme(is_dark)
         self._table.viewport().update()

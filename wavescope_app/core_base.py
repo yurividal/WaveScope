@@ -233,7 +233,7 @@ from .theme import (
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.9.0"
+VERSION = "1.9.1"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -298,6 +298,23 @@ ALL_CHANNELS = {**CH24, **CH5, **CH6}
 def chan_to_freq(chan: int) -> int:
     """Return best-guess center frequency for a channel number."""
     return ALL_CHANNELS.get(chan, 0)
+
+
+def freq_to_chan(freq_mhz: int) -> int:
+    """Derive primary channel number from a center frequency.
+
+    Used as a fallback when nmcli reports CHAN=0 but provides a valid frequency.
+    Covers 2.4 GHz, 5 GHz, and 6 GHz bands.  Returns 0 if freq is unrecognised.
+    """
+    if 2412 <= freq_mhz <= 2472:
+        return (freq_mhz - 2407) // 5
+    if freq_mhz == 2484:
+        return 14
+    if 5160 <= freq_mhz <= 5885:
+        return (freq_mhz - 5000) // 5
+    if 5955 <= freq_mhz <= 7115:
+        return (freq_mhz - 5950) // 5
+    return 0
 
 
 def freq_to_band(freq_mhz: int) -> str:

@@ -51,11 +51,10 @@ class APGroupSidebar(QWidget):
         layout.addWidget(self._header)
 
         # ── Separator ─────────────────────────────────────────────────────
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setFrameShadow(QFrame.Shadow.Plain)
-        sep.setStyleSheet(f"color:{MENU_BORDER};")
-        layout.addWidget(sep)
+        self._sep = QFrame()
+        self._sep.setFrameShape(QFrame.Shape.HLine)
+        self._sep.setFrameShadow(QFrame.Shadow.Plain)
+        layout.addWidget(self._sep)
 
         # ── AP list ───────────────────────────────────────────────────────
         self._list = QListWidget()
@@ -65,24 +64,6 @@ class APGroupSidebar(QWidget):
         self._list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._list.customContextMenuRequested.connect(self._on_ctx_menu)
         self._list.itemClicked.connect(self._on_item_clicked)
-        self._list.setStyleSheet(
-            f"QListWidget {{"
-            f"  background:{MENU_BG};"
-            f"  border:none;"
-            f"  color:{MENU_TEXT};"
-            f"  font-size:10pt;"
-            f"}}"
-            f"QListWidget::item {{"
-            f"  padding:3px 8px;"
-            f"}}"
-            f"QListWidget::item:hover {{"
-            f"  background:{MENU_SELECTED};"
-            f"}}"
-            f"QListWidget::item:selected {{"
-            f"  background:{MENU_SELECTED};"
-            f"  color:#e8f0ff;"
-            f"}}"
-        )
         layout.addWidget(self._list)
 
         # ── Internal state ────────────────────────────────────────────────
@@ -92,8 +73,54 @@ class APGroupSidebar(QWidget):
         self._excluded_keys: set = set()
         self._total_ap_count: int = 0
 
+        # Apply initial theme based on current palette
+        _initial_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        self.apply_theme(_initial_dark)
+
         # Insert the permanent "All APs" row immediately
         self._insert_all_row(0)
+
+    # ── Theme ─────────────────────────────────────────────────────────────
+
+    def apply_theme(self, is_dark: bool) -> None:
+        """Re-style the sidebar for dark or light mode."""
+        if is_dark:
+            list_bg  = MENU_BG
+            list_fg  = MENU_TEXT
+            list_sel = MENU_SELECTED
+            sel_fg   = "#e8f0ff"
+            sep_col  = MENU_BORDER
+            hdr_col  = BTN_ACCENT
+        else:
+            list_bg  = "#f0f4fa"
+            list_fg  = "#1a2a3a"
+            list_sel = "#cde0f7"
+            sel_fg   = "#0a1a2a"
+            sep_col  = "#c0cce0"
+            hdr_col  = "#2a60a0"
+
+        self._lbl_header.setStyleSheet(
+            f"color:{hdr_col}; font-weight:600; font-size:10pt;"
+        )
+        self._sep.setStyleSheet(f"color:{sep_col};")
+        self._list.setStyleSheet(
+            f"QListWidget {{"
+            f"  background:{list_bg};"
+            f"  border:none;"
+            f"  color:{list_fg};"
+            f"  font-size:10pt;"
+            f"}}"
+            f"QListWidget::item {{"
+            f"  padding:3px 8px;"
+            f"}}"
+            f"QListWidget::item:hover {{"
+            f"  background:{list_sel};"
+            f"}}"
+            f"QListWidget::item:selected {{"
+            f"  background:{list_sel};"
+            f"  color:{sel_fg};"
+            f"}}"
+        )
 
     # ── Public API ────────────────────────────────────────────────────────
 

@@ -5,6 +5,7 @@ Contains nmcli/iw parsers, enrichment logic, and scanner worker thread.
 
 from .core_models import *
 from .theme import IW_GEN_COLORS
+from .vendor_beacon import parse_vendor_ies
 
 
 def _split_terse(line: str) -> List[str]:
@@ -90,6 +91,10 @@ def parse_nmcli(output: str) -> List[AccessPoint]:
             wpa = parts[9].strip()
             rsn = parts[10].strip()
             bw = _parse_bw(parts[11])
+            # Fallback: nmcli sometimes returns CHAN=0 for certain channels.
+            # When freq is available, derive the channel from it instead.
+            if chan == 0 and freq:
+                chan = freq_to_chan(freq)
             # Derive freq from channel if not provided
             if freq == 0 and chan:
                 freq = chan_to_freq(chan)
@@ -343,80 +348,8 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         else:
             d["pmf"] = "No"
 
-        # ── Cisco AP system name (IE 133 / element ID 0x85) ────────────────
-        # Format: <8-byte header> 0x40 <ASCII name> 0x00 …
-        # iw -u outputs it as: Unknown IE (133): xx xx xx xx xx xx xx xx 40 <hex name> …
-        cisco_ie_m = re.search(
-            r"Unknown IE \(133\):\s*([0-9a-f ]+)", text, re.IGNORECASE
-        )
-        if cisco_ie_m:
-            try:
-                raw = bytes.fromhex(cisco_ie_m.group(1).replace(" ", ""))
-                # Find the 0x40 marker that precedes the AP name
-                idx = raw.find(0x40)
-                if idx != -1 and idx + 1 < len(raw):
-                    name_bytes = raw[idx + 1 :]
-                    # Terminate at first null or non-printable; strip trailing commas/spaces
-                    name = "".join(
-                        chr(b) for b in name_bytes if 32 <= b < 127
-                    ).rstrip(" ,\x00")
-                    if name:
-                        d["ap_name"] = name
-            except Exception:
-                pass
-
-        # ── Ubiquiti AP name (Vendor-specific IE 221 / OUI 00:15:6d) ──────
-        # WiFi Explorer shows this as Element ID 221, OUI 00:15:6D, Type 1.
-        # In iw -u this appears as a decoded vendor-specific line:
-        #   Vendor specific: OUI 00:15:6d, data: 01 <name-bytes...>
-        if not d.get("ap_name"):
-            ubnt_matches = re.findall(
-                r"Vendor\s+specific:\s*OUI\s*00:15:6d,\s*data:\s*([0-9a-f ]+)",
-                text,
-                re.IGNORECASE,
-            )
-            for hex_data in ubnt_matches:
-                try:
-                    raw = bytes.fromhex(hex_data.replace(" ", ""))
-                except Exception:
-                    continue
-
-                if not raw:
-                    continue
-
-                name_bytes: bytes
-                if raw[0] != 0x01:
-                    continue
-
-                # Some firmware encodes [type][len][value...]
-                if len(raw) >= 3 and raw[1] == len(raw) - 2:
-                    name_bytes = raw[2:]
-                # Most common observed format: [type=0x01][ascii-name...]
-                else:
-                    name_bytes = raw[1:]
-
-                # Keep printable ASCII; stop at first NUL if present.
-                if b"\x00" in name_bytes:
-                    name_bytes = name_bytes.split(b"\x00", 1)[0]
-                name = "".join(chr(b) for b in name_bytes if 32 <= b < 127).strip()
-                if len(name) >= 3:
-                    d["ap_name"] = name
-                    break
-
-        # ── Cisco beacon radio power (IE 150) ──────────────────────────────
-        # iw -u exposes Cisco's proprietary IE 150 as:
-        #   Unknown IE (150): 00 40 96 00 XX 00
-        # where XX matches the AP's beacon/TPC transmit power in dBm.
-        cisco_pwr_m = re.search(
-            r"Unknown IE \(150\):\s*([0-9a-f ]+)", text, re.IGNORECASE
-        )
-        if cisco_pwr_m:
-            try:
-                raw = bytes.fromhex(cisco_pwr_m.group(1).replace(" ", ""))
-                if len(raw) >= 6 and raw[:4] == bytes([0x00, 0x40, 0x96, 0x00]):
-                    d["cisco_tx_power_dbm"] = int(raw[4])
-            except Exception:
-                pass
+        # ── Vendor-specific IE parsers (AP name, TX power, …) ─────────────
+        parse_vendor_ies(text, d)
 
         # ── WPS manufacturer hint (often reveals branded vendor on LAA MACs) ──
         wps_manuf_m = re.search(r"(?im)^\s*\*\s*Manufacturer:\s*(.+?)\s*$", text)

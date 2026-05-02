@@ -17,164 +17,183 @@ class MainWindowUIMixin:
         tb.setIconSize(pg.QtCore.QSize(16, 16))
         self.addToolBar(tb)
 
-        tb.addWidget(QLabel("  Band: "))
-        self._band_combo = QComboBox()
-        self._band_combo.addItems(["All", "2.4 GHz", "5 GHz", "6 GHz"])
-        self._band_combo.setMinimumWidth(90)
-        self._band_combo.currentTextChanged.connect(self._on_band_change)
-        tb.addWidget(self._band_combo)
+        # ── Shared style helpers ────────────────────────────────────────
+        _GROUP_BG  = "#0a1520"
+        _GROUP_BDR = "#1c2e44"
+        _GROUP_LBL = "#3a5880"
 
-        tb.addSeparator()
+        def _btn_ss(checkable=False) -> str:
+            s = (
+                f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
+                f" border-radius:3px; padding:2px 8px; background:transparent; }}"
+                f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
+            )
+            if checkable:
+                s += (
+                    f"QPushButton:checked {{ color:{BTN_CHECKED_TEXT};"
+                    f" border-color:{BTN_CHECKED_BORDER}; background:{BTN_CHECKED_BG}; }}"
+                )
+            return s
 
-        # Search / filter
-        tb.addWidget(QLabel("  Filter: "))
-        self._search = QLineEdit()
-        self._search.setPlaceholderText("SSID / MAC / vendor…")
-        self._search.setMaximumWidth(200)
-        self._search.textChanged.connect(self._proxy.set_text)
-        tb.addWidget(self._search)
+        def _make_group(label: str, widgets: list) -> QFrame:
+            """Wrap *widgets* in a labelled rounded-rect pill."""
+            frame = QFrame()
+            frame.setObjectName("tbGroup")
+            frame.setStyleSheet(
+                f"QFrame#tbGroup {{ background:{_GROUP_BG};"
+                f" border:1px solid {_GROUP_BDR}; border-radius:6px; }}"
+            )
+            lay = QHBoxLayout(frame)
+            lay.setContentsMargins(7, 2, 7, 2)
+            lay.setSpacing(5)
+            hdr = QLabel(label)
+            hdr.setObjectName("tbGroupHeader")
+            hdr.setStyleSheet(
+                f"color:{_GROUP_LBL}; font-size:7pt; font-weight:700;"
+                " letter-spacing:0.5px; border:none; background:transparent;"
+            )
+            lay.addWidget(hdr)
+            div = QFrame()
+            div.setFrameShape(QFrame.Shape.VLine)
+            div.setFixedWidth(1)
+            div.setStyleSheet(f"background:{_GROUP_BDR}; border:none;")
+            lay.addWidget(div)
+            for w in widgets:
+                lay.addWidget(w)
+            return frame
 
-        tb.addSeparator()
+        # ── SCAN group widgets ──────────────────────────────────────────
+        self._btn_pause = QPushButton("⏸ Pause")
+        self._btn_pause.setCheckable(True)
+        self._btn_pause.setStyleSheet(_btn_ss(checkable=True))
+        self._btn_pause.toggled.connect(self._on_pause)
 
-        # Refresh interval
-        tb.addWidget(QLabel("  Refresh: "))
         self._interval_combo = QComboBox()
         for s in REFRESH_INTERVALS:
             self._interval_combo.addItem(f"{s}s", s)
-        self._interval_combo.setMinimumWidth(60)
+        self._interval_combo.setFixedWidth(58)
+        self._interval_combo.setToolTip("Scan refresh interval")
         self._interval_combo.currentIndexChanged.connect(self._on_interval_change)
-        tb.addWidget(self._interval_combo)
 
-        tb.addSeparator()
-
-        # Linger duration
-        tb.addWidget(QLabel("  Linger: "))
         self._linger_spin = QSpinBox()
         self._linger_spin.setRange(0, 600)
         self._linger_spin.setValue(60)
         self._linger_spin.setSuffix(" s")
-        self._linger_spin.setMinimumWidth(65)
+        self._linger_spin.setFixedWidth(68)
         self._linger_spin.setToolTip(
             "Keep vanished APs visible for this many seconds after they disappear\n"
             "(0 = remove immediately)"
         )
         self._linger_spin.valueChanged.connect(self._on_linger_change)
-        tb.addWidget(self._linger_spin)
 
-        tb.addSeparator()
-
-        # Pause / resume
-        self._btn_pause = QPushButton("⏸ Pause")
-        self._btn_pause.setCheckable(True)
-        self._btn_pause.setStyleSheet(
-            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
-            " border-radius:3px; padding:2px 8px; }"
-            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
-            f"QPushButton:checked {{ color:{BTN_CHECKED_TEXT}; border-color:{BTN_CHECKED_BORDER}; background:{BTN_CHECKED_BG}; }}"
+        # ⚙ Tools drop-down (OUI + Capture — less-frequent actions)
+        self._btn_tools = QPushButton("⚙ Tools ▾")
+        self._btn_tools.setStyleSheet(_btn_ss())
+        self._btn_tools.setToolTip("OUI database and packet capture")
+        _tools_menu = QMenu(self)
+        _tools_menu.addAction("📖  Update OUI Database", self._on_update_oui)
+        _tools_menu.addSeparator()
+        _tools_menu.addAction("📡  Packet Capture…", self._on_monitor_mode)
+        self._btn_tools.clicked.connect(
+            lambda: _tools_menu.exec(
+                self._btn_tools.mapToGlobal(self._btn_tools.rect().bottomLeft())
+            )
         )
-        self._btn_pause.toggled.connect(self._on_pause)
-        tb.addWidget(self._btn_pause)
 
-        tb.addSeparator()
-
-        # OUI database button
-        self._btn_oui = QPushButton("📖 Update OUI DB")
-        self._btn_oui.setToolTip("Download / refresh the IEEE manufacturer database")
-        self._btn_oui.setStyleSheet(
-            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
-            " border-radius:3px; padding:2px 8px; }"
-            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
-        )
-        self._btn_oui.clicked.connect(self._on_update_oui)
-        tb.addWidget(self._btn_oui)
-
-        tb.addSeparator()
-
-        # Monitor mode button
-        self._btn_monitor = QPushButton("📡 Packet Capture")
-        self._btn_monitor.setToolTip(
-            "Open packet-capture window (monitor mode)\n"
-            "Requires root — will temporarily disconnect WiFi"
-        )
-        self._btn_monitor.setStyleSheet(
-            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
-            " border-radius:3px; padding:2px 8px; }"
-            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
-        )
-        self._btn_monitor.clicked.connect(self._on_monitor_mode)
-        tb.addWidget(self._btn_monitor)
-
-        tb.addSeparator()
-
-        # AP sidebar toggle
+        # ── VIEW group widgets ──────────────────────────────────────────
         self._btn_sidebar = QPushButton("⊞ APs")
         self._btn_sidebar.setCheckable(True)
         self._btn_sidebar.setChecked(True)
         self._btn_sidebar.setToolTip("Show / hide the Access Point sidebar")
-        self._btn_sidebar.setStyleSheet(
-            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
-            " border-radius:3px; padding:2px 8px; }"
-            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
-            f"QPushButton:checked {{ color:{BTN_CHECKED_TEXT}; border-color:{BTN_CHECKED_BORDER}; background:{BTN_CHECKED_BG}; }}"
-        )
+        self._btn_sidebar.setStyleSheet(_btn_ss(checkable=True))
         self._btn_sidebar.toggled.connect(self._on_sidebar_toggle)
-        tb.addWidget(self._btn_sidebar)
 
-        tb.addSeparator()
+        # ── FILTER group widgets ────────────────────────────────────────
+        self._band_combo = QComboBox()
+        self._band_combo.addItems(["All", "2.4 GHz", "5 GHz", "6 GHz"])
+        self._band_combo.setFixedWidth(88)
+        self._band_combo.setToolTip("Filter by frequency band")
+        self._band_combo.currentTextChanged.connect(self._on_band_change)
 
-        # Known SSIDs filter
-        tb.addWidget(QLabel("  ★ Known: "))
+        self._search = QLineEdit()
+        self._search.setPlaceholderText("🔍  SSID / MAC / vendor…")
+        self._search.setFixedWidth(240)
+        self._search.textChanged.connect(self._proxy.set_text)
+
         self._known_combo = QComboBox()
-        self._known_combo.addItem("All",        "off")
-        self._known_combo.addItem("Only known", "only")
-        self._known_combo.addItem("Hide known", "hide")
-        self._known_combo.setMinimumWidth(100)
+        self._known_combo.addItem("All",          "off")
+        self._known_combo.addItem("Only known",   "only")
+        self._known_combo.addItem("Hide known",   "hide")
+        self._known_combo.setFixedWidth(112)
         self._known_combo.setToolTip(
-            "Filter the AP table by your Known SSIDs list.\n"
-            "'Only known' shows only SSIDs you have marked.\n"
+            "Filter by Known SSIDs list.\n"
+            "'Only known' shows only marked SSIDs.\n"
             "'Hide known' hides them."
         )
         self._known_combo.currentIndexChanged.connect(self._on_known_filter_change)
-        tb.addWidget(self._known_combo)
 
         self._btn_known_edit = QPushButton("Edit…")
         self._btn_known_edit.setToolTip("Open the Known SSIDs manager")
-        self._btn_known_edit.setStyleSheet(
-            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
-            " border-radius:3px; padding:2px 8px; }"
-            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
+        self._btn_known_edit.setStyleSheet(_btn_ss())
+        self._btn_known_edit.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
         )
         self._btn_known_edit.clicked.connect(self._on_known_edit)
-        tb.addWidget(self._btn_known_edit)
 
-        tb.addSeparator()
+        # ── Assemble pill groups ────────────────────────────────────────
+        _scan_group = _make_group("SCAN", [
+            self._btn_pause,
+            QLabel(" Refresh:"), self._interval_combo,
+            QLabel(" Linger:"), self._linger_spin,
+            self._btn_tools,
+        ])
+        _view_group = _make_group("VIEW", [
+            self._btn_sidebar,
+        ])
+        _filter_group = _make_group("Filters", [
+            self._search,
+            QLabel(" Band:"), self._band_combo,
+            QLabel(" SSIDs:"), self._known_combo,
+            self._btn_known_edit,
+        ])
+        _filter_group.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+        )
 
-        # AP count label
+        # ── Assemble toolbar layout ─────────────────────────────────────
+        self._tb_groups = [_scan_group, _view_group, _filter_group]
+
+        # ── Status widgets (right, no pill) ────────────────────────────
         self._lbl_count = QLabel("  0 APs")
-        tb.addWidget(self._lbl_count)
 
-        tb.addSeparator()
-
-        # Active column-filter badge + clear button
         self._lbl_filters = QLabel()
         self._lbl_filters.setStyleSheet(f"color:{BTN_CHECKED_TEXT}; font-size:9pt;")
         self._lbl_filters.hide()
-        tb.addWidget(self._lbl_filters)
 
         self._btn_clear_filters = QPushButton("✕ Clear filters")
         self._btn_clear_filters.setStyleSheet(
             f"QPushButton{{color:{BTN_CHECKED_TEXT};border:1px solid {BTN_CHECKED_TEXT};"
-            "border-radius:3px;padding:1px 6px;font-size:9pt;}"
+            f"border-radius:3px;padding:1px 6px;font-size:9pt;}}"
             f"QPushButton:hover{{background:{BTN_CHECKED_BG};}}"
         )
         self._btn_clear_filters.clicked.connect(self._on_clear_col_filters)
         self._btn_clear_filters.hide()
-        tb.addWidget(self._btn_clear_filters)
 
-        # Spacer — pushes filter badge to the left
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        tb.addWidget(spacer)
+        # ── Single widget fills toolbar ─────────────────────────────────
+        _tb_widget = QWidget()
+        _tb_lay = QHBoxLayout(_tb_widget)
+        _tb_lay.setContentsMargins(4, 2, 4, 2)
+        _tb_lay.setSpacing(8)
+        _tb_lay.addWidget(_scan_group)
+        _tb_lay.addWidget(_view_group)
+        _tb_lay.addWidget(_filter_group)
+        _spacer = QWidget()
+        _spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        _tb_lay.addWidget(_spacer)
+        _tb_lay.addWidget(self._lbl_count)
+        _tb_lay.addWidget(self._lbl_filters)
+        _tb_lay.addWidget(self._btn_clear_filters)
+        tb.addWidget(_tb_widget)
 
         # ── Central widget ─────────────────────────────────────────────────
         central = QWidget()

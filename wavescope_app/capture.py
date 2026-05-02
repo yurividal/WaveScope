@@ -154,14 +154,18 @@ class CaptureTypeDialog(QDialog):
         layout.setSpacing(14)
         layout.setContentsMargins(20, 18, 20, 18)
 
+        _is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        _title_col = CAPTURE_TITLE_FG if _is_dark else "#1a2a3a"
+        _note_col = FALLBACK_GRAY if _is_dark else "#555555"
+
         title = QLabel("Choose capture type")
         title.setStyleSheet(
-            f"font-size:13pt; font-weight:bold; color:{CAPTURE_TITLE_FG};"
+            f"font-size:13pt; font-weight:bold; color:{_title_col};"
         )
         layout.addWidget(title)
 
         note = QLabel("Both modes require a root password prompt (pkexec / Polkit).")
-        note.setStyleSheet(f"font-size:9pt; color:{FALLBACK_GRAY};")
+        note.setStyleSheet(f"font-size:9pt; color:{_note_col};")
         layout.addWidget(note)
         layout.addSpacing(4)
 

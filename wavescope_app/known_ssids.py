@@ -101,7 +101,7 @@ class KnownSSIDDialog(QDialog):
     def __init__(self, store: KnownSSIDStore, parent=None):
         super().__init__(parent)
         self._store = store
-        self.setWindowTitle("Known SSIDs")
+        self.setWindowTitle(f"Known SSIDs ({len(store)})")
         self.setMinimumSize(420, 380)
 
         is_dark = (
@@ -111,17 +111,20 @@ class KnownSSIDDialog(QDialog):
         fg   = DIALOG_TEXT_DARK if is_dark else DIALOG_TEXT_LIGHT
         bdr  = DIALOG_BORDER_DARK if is_dark else DIALOG_BORDER_LIGHT
         note = DIALOG_NOTE_DARK if is_dark else DIALOG_NOTE_LIGHT
+        inp_bg = MENU_BG if is_dark else "#ffffff"
+        inp_fg = MENU_TEXT if is_dark else DIALOG_TEXT_LIGHT
+        sel_bg = MENU_SELECTED if is_dark else "#cde0f7"
 
         self.setStyleSheet(
             f"QDialog {{ background:{bg}; color:{fg}; }}"
             f"QLabel {{ color:{fg}; }}"
             f"QListWidget {{"
-            f"  background:{MENU_BG}; color:{MENU_TEXT};"
+            f"  background:{inp_bg}; color:{inp_fg};"
             f"  border:1px solid {bdr}; border-radius:4px;"
             f"}}"
-            f"QListWidget::item:selected {{ background:{MENU_SELECTED}; }}"
+            f"QListWidget::item:selected {{ background:{sel_bg}; }}"
             f"QLineEdit {{"
-            f"  background:{MENU_BG}; color:{MENU_TEXT};"
+            f"  background:{inp_bg}; color:{inp_fg};"
             f"  border:1px solid {bdr}; border-radius:3px; padding:3px 6px;"
             f"}}"
             f"QPushButton {{"

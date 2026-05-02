@@ -38,6 +38,8 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         # Apply initial theme styling to the details/connection cards so the
         # first-launch appearance matches what the user sees after any theme switch.
         self._apply_details_theme(True)
+        self._apply_tb_theme(True)
+        self._ap_sidebar.apply_theme(True)
         # Whenever any filter changes (text, band, column include/exclude) the
         # proxy emits layoutChanged — refresh the graph to show only visible APs.
         self._proxy.layoutChanged.connect(self._on_filter_changed)

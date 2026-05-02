@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.9.1 — 2026-05-02
+
+### New Features
+- **Vendor beacon IE module** (`vendor_beacon.py`) — vendor-specific beacon IE parsers (Cisco IE 133 AP name, Cisco IE 150 TX power, Ubiquiti IE 221 AP name) are now modularised into a dedicated registry. Adding support for new vendors requires only writing a single parser function and appending it to the `_PARSERS` list.
+
+### Fixes
+- **Channel `?` for some APs** — nmcli returns `CHAN=0` for certain 5 GHz channels (observed on ch 144 / 5720 MHz). WaveScope now falls back to deriving the channel number from the reported frequency using the standard IEEE 802.11 formula, covering 2.4, 5, and 6 GHz bands.
+- Added `channel` and `freq_mhz` to sticky-nonzero field cache so channel info is preserved across linger cycles even if nmcli misses a cycle.
+
+### Improvements
+- **Toolbar redesign** — replaced the flat single-row toolbar with grouped pill sections: SCAN (pause, refresh interval, linger, tools menu), VIEW (sidebar toggle), and Filters (search, band, known SSIDs, edit).
+- **Known SSIDs** — persistent list of favourite/notable SSIDs stored in `~/.local/share/wavescope/known_ssids.json`. Filter toolbar combo (All / Only known / Hide known), context-menu add/remove, and an Edit dialog showing the count in the title.
+- Light-mode fixes for toolbar pills, AP sidebar, Known SSIDs dialog, and Capture type dialog.
+
 ## v1.9.0 — 2026-05-02
 
 ### New Features
