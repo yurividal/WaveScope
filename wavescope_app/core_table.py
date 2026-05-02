@@ -216,6 +216,9 @@ class APFilterProxy(QSortFilterProxyModel):
         self._ap_group_include: Optional[str] = None   # show only this group
         self._ap_group_include_label: str = ""         # human-readable label for badge
         self._ap_group_excludes: set = set()           # groups to hide
+        # Known-SSID filter
+        self._known_ssids: frozenset = frozenset()     # current snapshot from store
+        self._known_filter: str = "off"                # "off" | "only" | "hide"
         self.setSortRole(Qt.ItemDataRole.UserRole + 1)
 
     # ── Band / text ─────────────────────────────────────────────────────
@@ -282,6 +285,26 @@ class APFilterProxy(QSortFilterProxyModel):
     def has_ap_group_filters(self) -> bool:
         return self._ap_group_include is not None or bool(self._ap_group_excludes)
 
+    # ── Known-SSID filter ─────────────────────────────────────────────────
+    def set_known_ssids(self, ssids: frozenset) -> None:
+        """Update the known-SSID snapshot; re-filters if a known filter is active."""
+        self._known_ssids = ssids
+        if self._known_filter != "off":
+            self.invalidateFilter()
+
+    def set_known_filter(self, mode: str) -> None:
+        """Set filter mode: 'off', 'only' (show known only), 'hide' (hide known)."""
+        if mode not in ("off", "only", "hide"):
+            mode = "off"
+        self._known_filter = mode
+        self.invalidateFilter()
+
+    def has_known_filter(self) -> bool:
+        return self._known_filter != "off"
+
+    def known_filter_mode(self) -> str:
+        return self._known_filter
+
     _COL_NAMES = {
         COL_SSID: "SSID",
         COL_BSSID: "MAC",
@@ -309,6 +332,10 @@ class APFilterProxy(QSortFilterProxyModel):
             parts.append(f"AP: {lbl}")
         if self._ap_group_excludes:
             parts.append(f"AP hidden: {len(self._ap_group_excludes)}")
+        if self._known_filter == "only":
+            parts.append("★ Known only")
+        elif self._known_filter == "hide":
+            parts.append("★ Known hidden")
         return "  ·  ".join(parts)
 
     # ── Filter logic ─────────────────────────────────────────────────────
@@ -331,6 +358,13 @@ class APFilterProxy(QSortFilterProxyModel):
             if self._ap_group_include is not None and gk != self._ap_group_include:
                 return False
             if gk in self._ap_group_excludes:
+                return False
+        # Known-SSID filter
+        if self._known_filter != "off":
+            is_known = ap.display_ssid in self._known_ssids
+            if self._known_filter == "only" and not is_known:
+                return False
+            if self._known_filter == "hide" and is_known:
                 return False
         # Column includes: each constrained column must match one of its values
         for col, vals in self._includes.items():

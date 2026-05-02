@@ -6,6 +6,7 @@ Contains the UI assembly code for the main application window.
 from .core import *
 from .graphs import ChannelGraphWidget, SignalHistoryWidget
 from .ap_sidebar import APGroupSidebar
+from .known_ssids import KnownSSIDStore, KnownSSIDDialog
 
 
 class MainWindowUIMixin:
@@ -118,6 +119,33 @@ class MainWindowUIMixin:
         )
         self._btn_sidebar.toggled.connect(self._on_sidebar_toggle)
         tb.addWidget(self._btn_sidebar)
+
+        tb.addSeparator()
+
+        # Known SSIDs filter
+        tb.addWidget(QLabel("  ★ Known: "))
+        self._known_combo = QComboBox()
+        self._known_combo.addItem("All",        "off")
+        self._known_combo.addItem("Only known", "only")
+        self._known_combo.addItem("Hide known", "hide")
+        self._known_combo.setMinimumWidth(100)
+        self._known_combo.setToolTip(
+            "Filter the AP table by your Known SSIDs list.\n"
+            "'Only known' shows only SSIDs you have marked.\n"
+            "'Hide known' hides them."
+        )
+        self._known_combo.currentIndexChanged.connect(self._on_known_filter_change)
+        tb.addWidget(self._known_combo)
+
+        self._btn_known_edit = QPushButton("Edit…")
+        self._btn_known_edit.setToolTip("Open the Known SSIDs manager")
+        self._btn_known_edit.setStyleSheet(
+            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
+            " border-radius:3px; padding:2px 8px; }"
+            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
+        )
+        self._btn_known_edit.clicked.connect(self._on_known_edit)
+        tb.addWidget(self._btn_known_edit)
 
         tb.addSeparator()
 

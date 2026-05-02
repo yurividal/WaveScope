@@ -8,6 +8,7 @@ from .core import *
 from .core_vendor import _resolve_vendor_icon_path
 from .graphs import ChannelAllocationsDialog
 from .capture import CaptureTypeDialog, ManagedCaptureWindow, MonitorModeWindow
+from .known_ssids import KnownSSIDStore, KnownSSIDDialog
 from .theme import (
     IW_GEN_COLORS,
     _dark_palette,
@@ -662,6 +663,28 @@ class MainWindowLogicMixin:
 
         menu.addSeparator()
 
+        # ── Known SSIDs ───────────────────────────────────────────────────
+        _ssid = ap.display_ssid
+        if _ssid and _ssid not in ("", "--"):
+            if _ssid in self._known_store:
+                act_known = menu.addAction(f"☆  Remove '{_ssid}' from Known SSIDs")
+                act_known.triggered.connect(
+                    lambda checked, s=_ssid: (
+                        self._known_store.remove(s),
+                        self._known_store_changed(),
+                    )
+                )
+            else:
+                act_known = menu.addAction(f"★  Add '{_ssid}' to Known SSIDs")
+                act_known.triggered.connect(
+                    lambda checked, s=_ssid: (
+                        self._known_store.add(s),
+                        self._known_store_changed(),
+                    )
+                )
+
+        menu.addSeparator()
+
         # Details shortcut
         det = menu.addAction("ℹ  View details")
         det.triggered.connect(lambda: self._open_details_for_proxy_row(idx.row()))
@@ -697,7 +720,11 @@ class MainWindowLogicMixin:
             self._tabs.setCurrentIndex(self._details_tab_index)
 
     def _refresh_filter_badge(self):
-        has_any = self._proxy.has_col_filters() or self._proxy.has_ap_group_filters()
+        has_any = (
+            self._proxy.has_col_filters()
+            or self._proxy.has_ap_group_filters()
+            or self._proxy.has_known_filter()
+        )
         if has_any:
             self._lbl_filters.setText(self._proxy.active_filter_text())
             self._lbl_filters.show()
@@ -712,6 +739,11 @@ class MainWindowLogicMixin:
         self._proxy.clear_col_filters()
         self._proxy.clear_ap_group_filters()
         self._ap_sidebar.clear_all_filters()
+        # Reset known combo to "All" without re-triggering the change handler
+        self._known_combo.blockSignals(True)
+        self._known_combo.setCurrentIndex(0)
+        self._known_combo.blockSignals(False)
+        self._proxy.set_known_filter("off")
         self._refresh_filter_badge()
 
     # ── AP Sidebar handlers ───────────────────────────────────────────────
@@ -733,6 +765,23 @@ class MainWindowLogicMixin:
         """Un-hide a previously hidden AP group."""
         self._proxy.remove_ap_group_exclude(key)
         self._refresh_filter_badge()
+
+    # ── Known SSIDs handlers ──────────────────────────────────────────────
+
+    def _known_store_changed(self) -> None:
+        """Called whenever the known-SSID store is mutated."""
+        self._proxy.set_known_ssids(self._known_store.as_frozenset())
+        self._refresh_filter_badge()
+
+    def _on_known_filter_change(self, idx: int) -> None:
+        mode = self._known_combo.itemData(idx)
+        self._proxy.set_known_filter(mode)
+        self._refresh_filter_badge()
+
+    def _on_known_edit(self) -> None:
+        dlg = KnownSSIDDialog(self._known_store, parent=self)
+        dlg.changed.connect(self._known_store_changed)
+        dlg.exec()
 
     def _on_sidebar_toggle(self, checked: bool) -> None:
         """Collapse or expand the AP sidebar panel."""

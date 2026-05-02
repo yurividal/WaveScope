@@ -6,6 +6,7 @@ Composes UI and behavior mixins into the MainWindow class.
 from .core import *
 from .main_window_ui import MainWindowUIMixin
 from .main_window_logic import MainWindowLogicMixin
+from .known_ssids import KnownSSIDStore
 
 
 class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
@@ -25,10 +26,13 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self._scanner.data_ready.connect(self._on_data)
         self._scanner.scan_error.connect(self._on_error)
 
+        self._known_store = KnownSSIDStore()
+
         self._model = APTableModel()
         self._proxy = APFilterProxy()
         self._proxy.setSourceModel(self._model)
         self._proxy.setSortCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._proxy.set_known_ssids(self._known_store.as_frozenset())
 
         self._setup_ui()
         # Apply initial theme styling to the details/connection cards so the
