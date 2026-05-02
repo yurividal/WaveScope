@@ -233,7 +233,7 @@ from .theme import (
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.8.7"
+VERSION = "1.9.0"
 APP_NAME = "WaveScope"
 
 HISTORY_SECONDS = 120  # seconds of signal history to keep
@@ -529,3 +529,24 @@ def signal_color(signal: int) -> QColor:
 def signal_to_dbm(signal: int) -> int:
     """Approximate dBm from nmcli 0-100 SIGNAL."""
     return int((signal / 2) - 100)
+
+
+def ap_group_key(bssid: str) -> str:
+    """Compute the AP-group key for a BSSID.
+
+    Groups BSSIDs belonging to the same physical AP by masking the low
+    nibble (4 bits) of the last octet.  Most enterprise APs allocate a
+    contiguous 16-address BSSID block for their various SSIDs / radios.
+
+    Returns a normalised upper-case string, e.g. 'AC:2A:A1:33:16:E0'.
+    If the BSSID is malformed the uppercased input is returned unchanged.
+    """
+    parts = re.split(r"[:\-]", bssid.strip().upper())
+    if len(parts) != 6:
+        return bssid.upper()
+    try:
+        last = int(parts[5], 16) & 0xF0
+        parts[5] = f"{last:02X}"
+        return ":".join(parts)
+    except ValueError:
+        return bssid.upper()

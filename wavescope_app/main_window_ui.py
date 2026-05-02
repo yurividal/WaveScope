@@ -5,6 +5,7 @@ Contains the UI assembly code for the main application window.
 
 from .core import *
 from .graphs import ChannelGraphWidget, SignalHistoryWidget
+from .ap_sidebar import APGroupSidebar
 
 
 class MainWindowUIMixin:
@@ -104,6 +105,22 @@ class MainWindowUIMixin:
 
         tb.addSeparator()
 
+        # AP sidebar toggle
+        self._btn_sidebar = QPushButton("⊞ APs")
+        self._btn_sidebar.setCheckable(True)
+        self._btn_sidebar.setChecked(True)
+        self._btn_sidebar.setToolTip("Show / hide the Access Point sidebar")
+        self._btn_sidebar.setStyleSheet(
+            f"QPushButton {{ color:{BTN_ACCENT}; border:1px solid {BTN_BORDER};"
+            " border-radius:3px; padding:2px 8px; }"
+            f"QPushButton:hover {{ background:{BTN_HOVER_BG}; }}"
+            f"QPushButton:checked {{ color:{BTN_CHECKED_TEXT}; border-color:{BTN_CHECKED_BORDER}; background:{BTN_CHECKED_BG}; }}"
+        )
+        self._btn_sidebar.toggled.connect(self._on_sidebar_toggle)
+        tb.addWidget(self._btn_sidebar)
+
+        tb.addSeparator()
+
         # AP count label
         self._lbl_count = QLabel("  0 APs")
         tb.addWidget(self._lbl_count)
@@ -138,9 +155,25 @@ class MainWindowUIMixin:
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(4)
 
+        # Horizontal splitter: AP sidebar (left) + main content (right)
+        self._h_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._h_splitter.setChildrenCollapsible(True)
+        root.addWidget(self._h_splitter)
+
+        # ── AP Group Sidebar ───────────────────────────────────────────────
+        self._ap_sidebar = APGroupSidebar()
+        self._h_splitter.addWidget(self._ap_sidebar)
+        self._h_splitter.setCollapsible(0, True)
+
         # Vertical splitter: table on top, graphs on bottom
         splitter = QSplitter(Qt.Orientation.Vertical)
-        root.addWidget(splitter)
+        self._h_splitter.addWidget(splitter)
+        self._h_splitter.setCollapsible(1, False)
+        self._h_splitter.setStretchFactor(0, 0)
+        self._h_splitter.setStretchFactor(1, 1)
+        # Give the sidebar a sensible initial width (180 px); the table gets the rest
+        self._h_splitter.setSizes([180, 9999])
+        self._sidebar_last_width = 180  # remembered width for collapse/expand
 
         # ── AP Table ───────────────────────────────────────────────────────
         self._table = QTableView()
@@ -648,3 +681,10 @@ class MainWindowUIMixin:
         sb.addPermanentWidget(QLabel("  "))
 
         sb.showMessage("Starting scanner…")
+
+        # ── AP Sidebar signal connections ─────────────────────────────────
+        self._ap_sidebar.group_include_requested.connect(self._on_sidebar_include)
+        self._ap_sidebar.group_exclude_requested.connect(self._on_sidebar_exclude)
+        self._ap_sidebar.group_unexclude_requested.connect(self._on_sidebar_unexclude)
+        # Track sidebar width so collapse/expand remembers the last size
+        self._h_splitter.splitterMoved.connect(self._on_hsplitter_moved)

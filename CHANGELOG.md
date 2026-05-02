@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.9.0 — 2026-05-02
+
+### New Features
+- **AP Group Sidebar** — a collapsible left-hand panel lists every detected physical access point, grouped by BSSID affinity (the low nibble of the last MAC octet is masked, capturing the 16-address block most enterprise APs allocate across their radios/SSIDs). Each group is labelled with a short vendor name and the masked nibble range (e.g. `Cisco:33:16:E#`), making multi-radio deployments immediately recognisable.
+- **Sidebar filtering** — clicking an AP group in the sidebar narrows the main table to only those BSSIDs. Clicking again (or the **All APs** row at the top) restores the full view. Right-clicking an AP group offers *Show only this AP* and *Hide this AP* / *Unhide* actions.
+- **Table context-menu AP filter** — the *Show only* and *Hide* sub-menus now include a **This AP** entry that applies the same physical-AP group filter directly from the table right-click menu.
+- **Sidebar toggle** — a new **⊞ APs** toolbar button collapses or expands the sidebar panel. Dragging the splitter handle to zero also collapses it; the last width is remembered and restored on expand.
+
+### Improvements
+- *Clear filters* now clears AP-group filters in addition to column filters, and the filter badge reflects active AP-group selections.
+
 ## v1.8.7 — 2026-05-01
 
 ### New Features

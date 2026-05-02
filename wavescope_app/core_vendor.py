@@ -454,6 +454,31 @@ def reload_oui_db():
     _vendor_icon_cache.clear()
 
 
+def ap_group_display_label(group_key: str, manufacturer: str) -> str:
+    """Format the sidebar display label for an AP group.
+
+    Replaces the OUI (first 3 octets) with a short vendor name and
+    appends '#' for the masked nibble of the last octet.
+
+    Example:  key='AC:2A:A1:33:16:E0', manufacturer='Cisco Systems'
+              → 'Cisco:33:16:E#'
+
+    If the manufacturer is unknown the raw OUI octets are kept.
+    """
+    parts = group_key.split(":")
+    if len(parts) != 6:
+        return group_key
+    vendor = format_manufacturer_display(manufacturer).strip()
+    if vendor:
+        first_word = vendor.split()[0][:14]
+    else:
+        first_word = ":".join(parts[:3])  # fallback: raw OUI octets
+    # The low nibble of the last byte is zeroed in the group key (e.g. 'E0');
+    # show the high nibble + '#' to convey the masked range.
+    first_nibble = parts[5][0]  # e.g. 'E' from 'E0'
+    return f"{first_word}:{parts[3]}:{parts[4]}:{first_nibble}#"
+
+
 def get_manufacturer(bssid: str) -> str:
     global _oui_full, _oui_loaded, _oui_suffix_unique_vendor
     if not _oui_loaded:

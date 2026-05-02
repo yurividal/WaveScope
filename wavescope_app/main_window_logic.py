@@ -357,6 +357,9 @@ class MainWindowLogicMixin:
         any_cisco_pwr = any(ap.cisco_tx_power_dbm is not None for ap in aps)
         self._table.setColumnHidden(COL_CISCO_PWR, not any_cisco_pwr)
 
+        # Update the AP sidebar (skips rebuild if groups haven't changed)
+        self._ap_sidebar.update_groups(aps)
+
         total = len(aps)
         shown = self._proxy.rowCount()
         self._lbl_count.setText(f"  {shown}/{total} APs")
@@ -606,6 +609,10 @@ class MainWindowLogicMixin:
             (COL_SEC, ap.security_short, "Security"),
         ]
 
+        # AP group key + label for this BSSID
+        _ap_gkey = ap_group_key(ap.bssid)
+        _ap_glabel = ap_group_display_label(_ap_gkey, ap.manufacturer)
+
         # Show only
         show_menu = menu.addMenu("👁  Show only")
         for fcol, fval, fname in filterable:
@@ -616,6 +623,15 @@ class MainWindowLogicMixin:
                     lambda checked, c=fcol, v=fval: self._proxy.add_include(c, v)
                     or self._refresh_filter_badge()
                 )
+        show_menu.addSeparator()
+        a_ap_show = show_menu.addAction(f"This AP  ({_ap_glabel})")
+        a_ap_show.triggered.connect(
+            lambda checked, k=_ap_gkey, l=_ap_glabel: (
+                self._proxy.set_ap_group_include(k, label=l),
+                self._ap_sidebar.set_active_group(k),
+                self._refresh_filter_badge(),
+            )
+        )
 
         # Hide / exclude
         hide_menu = menu.addMenu("🚫  Hide")
@@ -627,12 +643,21 @@ class MainWindowLogicMixin:
                     lambda checked, c=fcol, v=fval: self._proxy.add_exclude(c, v)
                     or self._refresh_filter_badge()
                 )
+        hide_menu.addSeparator()
+        a_ap_hide = hide_menu.addAction(f"This AP  ({_ap_glabel})")
+        a_ap_hide.triggered.connect(
+            lambda checked, k=_ap_gkey: (
+                self._proxy.add_ap_group_exclude(k),
+                self._ap_sidebar.mark_group_excluded(k, True),
+                self._refresh_filter_badge(),
+            )
+        )
 
         menu.addSeparator()
 
         # Remove specific include/exclude
-        if self._proxy.has_col_filters():
-            clear_a = menu.addAction("✕  Clear all column filters")
+        if self._proxy.has_col_filters() or self._proxy.has_ap_group_filters():
+            clear_a = menu.addAction("✕  Clear all filters")
             clear_a.triggered.connect(self._on_clear_col_filters)
 
         menu.addSeparator()
@@ -672,7 +697,8 @@ class MainWindowLogicMixin:
             self._tabs.setCurrentIndex(self._details_tab_index)
 
     def _refresh_filter_badge(self):
-        if self._proxy.has_col_filters():
+        has_any = self._proxy.has_col_filters() or self._proxy.has_ap_group_filters()
+        if has_any:
             self._lbl_filters.setText(self._proxy.active_filter_text())
             self._lbl_filters.show()
             self._btn_clear_filters.show()
@@ -684,7 +710,57 @@ class MainWindowLogicMixin:
 
     def _on_clear_col_filters(self):
         self._proxy.clear_col_filters()
+        self._proxy.clear_ap_group_filters()
+        self._ap_sidebar.clear_all_filters()
         self._refresh_filter_badge()
+
+    # ── AP Sidebar handlers ───────────────────────────────────────────────
+
+    def _on_sidebar_include(self, key: str, label: str) -> None:
+        """Show only the selected AP group (empty key = clear filter)."""
+        if key:
+            self._proxy.set_ap_group_include(key, label=label)
+        else:
+            self._proxy.set_ap_group_include(None)
+        self._refresh_filter_badge()
+
+    def _on_sidebar_exclude(self, key: str) -> None:
+        """Hide all BSSIDs belonging to the given AP group."""
+        self._proxy.add_ap_group_exclude(key)
+        self._refresh_filter_badge()
+
+    def _on_sidebar_unexclude(self, key: str) -> None:
+        """Un-hide a previously hidden AP group."""
+        self._proxy.remove_ap_group_exclude(key)
+        self._refresh_filter_badge()
+
+    def _on_sidebar_toggle(self, checked: bool) -> None:
+        """Collapse or expand the AP sidebar panel."""
+        sizes = self._h_splitter.sizes()
+        if checked:
+            # Expand: restore last known width
+            w = getattr(self, "_sidebar_last_width", 180)
+            total = sum(sizes)
+            self._h_splitter.setSizes([w, max(1, total - w)])
+        else:
+            # Collapse: remember current width first
+            if sizes[0] > 0:
+                self._sidebar_last_width = sizes[0]
+            self._h_splitter.setSizes([0, sum(sizes)])
+
+    def _on_hsplitter_moved(self, pos: int, index: int) -> None:
+        """Track sidebar width so the toggle can restore it."""
+        w = self._h_splitter.sizes()[0]
+        if w > 0:
+            self._sidebar_last_width = w
+            # Keep toggle button state in sync when user drags the splitter
+            self._btn_sidebar.blockSignals(True)
+            self._btn_sidebar.setChecked(True)
+            self._btn_sidebar.blockSignals(False)
+        else:
+            self._btn_sidebar.blockSignals(True)
+            self._btn_sidebar.setChecked(False)
+            self._btn_sidebar.blockSignals(False)
 
     def _show_details(self, ap: AccessPoint):
         color = self._model.ssid_colors().get(ap.ssid, QColor(FALLBACK_GRAY)).name()

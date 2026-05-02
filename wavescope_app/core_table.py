@@ -212,6 +212,10 @@ class APFilterProxy(QSortFilterProxyModel):
         # Column-level filters: col → set of display-string values
         self._includes: Dict[int, set] = {}  # row must match one value per col
         self._excludes: Dict[int, set] = {}  # row must not match any value per col
+        # AP-group filters (keyed by ap_group_key())
+        self._ap_group_include: Optional[str] = None   # show only this group
+        self._ap_group_include_label: str = ""         # human-readable label for badge
+        self._ap_group_excludes: set = set()           # groups to hide
         self.setSortRole(Qt.ItemDataRole.UserRole + 1)
 
     # ── Band / text ─────────────────────────────────────────────────────
@@ -254,6 +258,30 @@ class APFilterProxy(QSortFilterProxyModel):
     def has_col_filters(self) -> bool:
         return bool(self._includes or self._excludes)
 
+    # ── AP-group include / exclude ────────────────────────────────────────
+    def set_ap_group_include(self, key: Optional[str], label: str = "") -> None:
+        """Show only BSSIDs belonging to *key* group, or pass None to clear."""
+        self._ap_group_include = key
+        self._ap_group_include_label = label if key else ""
+        self.invalidateFilter()
+
+    def add_ap_group_exclude(self, key: str) -> None:
+        self._ap_group_excludes.add(key)
+        self.invalidateFilter()
+
+    def remove_ap_group_exclude(self, key: str) -> None:
+        self._ap_group_excludes.discard(key)
+        self.invalidateFilter()
+
+    def clear_ap_group_filters(self) -> None:
+        self._ap_group_include = None
+        self._ap_group_include_label = ""
+        self._ap_group_excludes.clear()
+        self.invalidateFilter()
+
+    def has_ap_group_filters(self) -> bool:
+        return self._ap_group_include is not None or bool(self._ap_group_excludes)
+
     _COL_NAMES = {
         COL_SSID: "SSID",
         COL_BSSID: "MAC",
@@ -276,6 +304,11 @@ class APFilterProxy(QSortFilterProxyModel):
         for col, vals in self._excludes.items():
             n = self._COL_NAMES.get(col, str(col))
             parts.append(f"− {n}: {', '.join(sorted(vals))}")
+        if self._ap_group_include is not None:
+            lbl = self._ap_group_include_label or self._ap_group_include
+            parts.append(f"AP: {lbl}")
+        if self._ap_group_excludes:
+            parts.append(f"AP hidden: {len(self._ap_group_excludes)}")
         return "  ·  ".join(parts)
 
     # ── Filter logic ─────────────────────────────────────────────────────
@@ -291,6 +324,13 @@ class APFilterProxy(QSortFilterProxyModel):
                 f"{ap.display_ssid} {ap.bssid} {ap.manufacturer} {ap.band}".lower()
             )
             if self._text_filter not in haystack:
+                return False
+        # AP-group filters (checked before column filters for short-circuit speed)
+        if self._ap_group_include is not None or self._ap_group_excludes:
+            gk = ap_group_key(ap.bssid)
+            if self._ap_group_include is not None and gk != self._ap_group_include:
+                return False
+            if gk in self._ap_group_excludes:
                 return False
         # Column includes: each constrained column must match one of its values
         for col, vals in self._includes.items():
