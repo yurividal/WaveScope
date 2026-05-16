@@ -348,6 +348,11 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         else:
             d["pmf"] = "No"
 
+        # ── 802.11h TPC Report IE (standard, iw already decodes it) ─────────
+        tpc_m = re.search(r"TPC report:\s*TX power:\s*(\d+)\s*dBm", text, re.IGNORECASE)
+        if tpc_m:
+            d["tpc_tx_power_dbm"] = int(tpc_m.group(1))
+
         # ── Vendor-specific IE parsers (AP name, TX power, …) ─────────────
         parse_vendor_ies(text, d)
 
@@ -662,6 +667,10 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                     iw_data.setdefault(bssid, {})["cisco_tx_power_dbm"] = d_u[
                         "cisco_tx_power_dbm"
                     ]
+                if "ruckus_tx_power_dbm" in d_u:
+                    iw_data.setdefault(bssid, {})["ruckus_tx_power_dbm"] = d_u[
+                        "ruckus_tx_power_dbm"
+                    ]
         conn_data = _get_connected_link_metrics(iface)
         conn_bssid = str(conn_data.get("conn_bssid", "")).lower()
         for ap in aps:
@@ -691,6 +700,8 @@ def enrich_with_iw(aps: List[AccessPoint]) -> None:
                 "he_eht_features",
                 "ap_name",
                 "cisco_tx_power_dbm",
+                "ruckus_tx_power_dbm",
+                "tpc_tx_power_dbm",
             ):
                 if attr in d:
                     setattr(ap, attr, d[attr])

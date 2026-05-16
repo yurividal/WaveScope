@@ -188,11 +188,16 @@ class APTableModel(QAbstractTableModel):
         if col == COL_APNAME:
             return ap.ap_name
         if col == COL_CISCO_PWR:
-            return (
-                f"{ap.cisco_tx_power_dbm} dBm"
+            pwr = (
+                ap.cisco_tx_power_dbm
                 if ap.cisco_tx_power_dbm is not None
-                else ""
+                else ap.ruckus_tx_power_dbm
+                if ap.ruckus_tx_power_dbm is not None
+                else ap.tpc_tx_power_dbm
             )
+            if pwr is None:
+                return ""
+            return f"{pwr:.1f} dBm" if isinstance(pwr, float) else f"{pwr} dBm"
         return ""
 
     def ap_at(self, row: int) -> Optional[AccessPoint]:

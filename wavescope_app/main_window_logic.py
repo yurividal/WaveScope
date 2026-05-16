@@ -163,6 +163,8 @@ class MainWindowLogicMixin:
         "he_eht_features",
         "ap_name",
         "cisco_tx_power_dbm",
+        "ruckus_tx_power_dbm",
+        "tpc_tx_power_dbm",
         "conn_iface",
         "conn_link_ssid",
         "conn_link_freq_mhz",
@@ -357,7 +359,12 @@ class MainWindowLogicMixin:
         # Show AP Name column only when at least one AP has a name resolved
         any_ap_name = any(ap.ap_name for ap in aps)
         self._table.setColumnHidden(COL_APNAME, not any_ap_name)
-        any_cisco_pwr = any(ap.cisco_tx_power_dbm is not None for ap in aps)
+        any_cisco_pwr = any(
+            ap.cisco_tx_power_dbm is not None
+            or ap.ruckus_tx_power_dbm is not None
+            or ap.tpc_tx_power_dbm is not None
+            for ap in aps
+        )
         self._table.setColumnHidden(COL_CISCO_PWR, not any_cisco_pwr)
 
         # Update the AP sidebar (skips rebuild if groups haven't changed)
@@ -1142,9 +1149,16 @@ class MainWindowLogicMixin:
         if "ap_name" in v:
             v["ap_name"].setText(ap.ap_name or dim("Not advertised"))
         if "cisco_tx_power" in v:
-            v["cisco_tx_power"].setText(
-                f"{ap.cisco_tx_power_dbm} dBm"
+            pwr = (
+                ap.cisco_tx_power_dbm
                 if ap.cisco_tx_power_dbm is not None
+                else ap.ruckus_tx_power_dbm
+                if ap.ruckus_tx_power_dbm is not None
+                else ap.tpc_tx_power_dbm
+            )
+            v["cisco_tx_power"].setText(
+                (f"{pwr:.1f} dBm" if isinstance(pwr, float) else f"{pwr} dBm")
+                if pwr is not None
                 else dim("Not advertised")
             )
 

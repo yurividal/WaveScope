@@ -3,8 +3,9 @@
 Each parser function receives the full ``iw`` BSS text block for one AP and
 a mutable result dict ``d``.  It should populate one or more of:
 
-    d["ap_name"]            – human-readable AP/radio name (str)
-    d["cisco_tx_power_dbm"] – transmit power in dBm (int)
+    d["ap_name"]              – human-readable AP/radio name (str)
+    d["cisco_tx_power_dbm"]  – Cisco transmit power in dBm (int)
+    d["ruckus_tx_power_dbm"] – Ruckus transmit power in dBm (float, half-dBm units)
 
 To add a new vendor:
   1. Write a function with signature  ``def _parse_<vendor>(text, d) -> None``
@@ -116,6 +117,64 @@ def _parse_ubiquiti_ap_name(text: str, d: dict) -> None:
             break
 
 
+def _parse_aruba_ap_name(text: str, d: dict) -> None:
+    """Aruba AP name from Vendor-specific IE 221 / OUI 00:0b:86.
+
+    Format: OUI 00:0b:86, data: 01 03 00 <AP-name-ASCII>
+      - Byte 0: type  = 0x01
+      - Byte 1: subtype = 0x03  (AP name; 0x04 is a different Aruba sub-IE)
+      - Byte 2: 0x00  (separator, skipped by _printable)
+      - Bytes 3+: AP name as printable ASCII
+
+    Requires "Include AP name in beacons" to be enabled on the Aruba
+    Mobility Controller / Aruba Central WLAN profile.
+    """
+    if d.get("ap_name"):
+        return
+    matches = re.findall(
+        r"Vendor\s+specific:\s*OUI\s*00:0b:86,\s*data:\s*([0-9a-f ]+)",
+        text,
+        re.IGNORECASE,
+    )
+    for hex_data in matches:
+        try:
+            raw = bytes.fromhex(hex_data.replace(" ", ""))
+        except Exception:
+            continue
+        if len(raw) >= 4 and raw[0] == 0x01 and raw[1] == 0x03:
+            name = _printable(raw[2:]).strip()
+            if name:
+                d["ap_name"] = name
+                return
+
+
+def _parse_ruckus_tx_power(text: str, d: dict) -> None:
+    """Ruckus TX power from Vendor-specific IE 221 / OUI 00:13:92.
+
+    Observed format: 01 00 01 05 XX where XX is TX power in half-dBm units.
+    A value of 0x00 means auto/unset and is skipped.
+    Reverse-engineered from a Ruckus SmartZone deployment (Marriott Bonvoy);
+    path-loss consistency across 10 APs confirms the 0.5 dBm/unit encoding.
+    """
+    matches = re.findall(
+        r"Vendor\s+specific:\s*OUI\s*00:13:92,\s*data:\s*([0-9a-f ]+)",
+        text,
+        re.IGNORECASE,
+    )
+    for hex_data in matches:
+        try:
+            raw = bytes.fromhex(hex_data.replace(" ", ""))
+        except Exception:
+            continue
+        if (
+            len(raw) == 5
+            and raw[:4] == bytes([0x01, 0x00, 0x01, 0x05])
+            and raw[4] != 0
+        ):
+            d["ruckus_tx_power_dbm"] = raw[4] / 2.0
+            break
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry — add new vendor parsers here
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,6 +183,8 @@ _PARSERS: list[Callable[[str, dict], None]] = [
     _parse_cisco_ap_name,
     _parse_cisco_tx_power,
     _parse_ubiquiti_ap_name,
+    _parse_aruba_ap_name,
+    _parse_ruckus_tx_power,
 ]
 
 

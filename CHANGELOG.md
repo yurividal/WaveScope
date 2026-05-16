@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.9.2 — 2026-05-16
+
+### New Features
+- **TX power for Aruba, Ruckus, and any 802.11h AP** — the "Power Level" column now populates for three sources (in priority order): Cisco proprietary IE 150, Ruckus OUI `00:13:92` (half-dBm encoded, reverse-engineered from a live SmartZone deployment), and the standard 802.11h TPC Report IE (covers Aruba, Juniper Mist, Extreme, and any other vendor that includes it).
+- **Aruba AP name** — WaveScope now reads the AP name from the Aruba vendor IE (`OUI 00:0b:86`, subtype `0x03`). Requires "Include AP name in beacons" to be enabled on the Aruba Mobility Controller or Aruba Central WLAN profile.
+
 ## v1.9.1 — 2026-05-02
 
 ### New Features

@@ -44,6 +44,8 @@ class AccessPoint:
     he_eht_features: str = ""  # HE/EHT extras (BSS color, TWT, spatial reuse)
     ap_name: str = ""  # Cisco AP system name from proprietary IE 133 (if advertised)
     cisco_tx_power_dbm: Optional[int] = None  # Cisco beacon radio power from IE 150
+    ruckus_tx_power_dbm: Optional[float] = None  # Ruckus TX power (half-dBm units, OUI 00:13:92)
+    tpc_tx_power_dbm: Optional[int] = None  # 802.11h TPC Report IE TX power (dBm)
     # ── Connected-session telemetry (iw link / iw station dump) ────────────
     conn_iface: str = ""
     conn_link_ssid: str = ""
