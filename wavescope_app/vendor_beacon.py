@@ -175,6 +175,20 @@ def _parse_ruckus_tx_power(text: str, d: dict) -> None:
             break
 
 
+def _parse_meraki_vendor(text: str, d: dict) -> None:
+    """Detect Cisco Meraki from their vendor-specific IE OUI 00:18:6e.
+
+    Meraki APs always include this OUI in a vendor-specific IE. Used as a
+    manufacturer fallback when the AP uses OUIs absent from the local OUI DB
+    (common with newer hardware).  Only sets wps_manufacturer when not already
+    populated so that an explicit WPS Manufacturer field takes precedence.
+    """
+    if not d.get("wps_manufacturer") and re.search(
+        r"Vendor\s+specific:\s*OUI\s*00:18:6e\b", text, re.IGNORECASE
+    ):
+        d["wps_manufacturer"] = "Cisco Meraki"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Registry — add new vendor parsers here
 # ─────────────────────────────────────────────────────────────────────────────
@@ -185,6 +199,7 @@ _PARSERS: list[Callable[[str, dict], None]] = [
     _parse_ubiquiti_ap_name,
     _parse_aruba_ap_name,
     _parse_ruckus_tx_power,
+    _parse_meraki_vendor,
 ]
 
 
