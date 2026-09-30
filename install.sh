@@ -33,7 +33,8 @@ elif command -v dnf &>/dev/null; then
     INSTALL_CMD="sudo dnf install -y"
 elif command -v zypper &>/dev/null; then
     PKG_MGR="zypper"
-    PKGS="python3 python3-pip NetworkManager iw tcpdump polkit libxcb-cursor0"
+    # libgthread-2_0-0: needed by the PyPI Qt 6 wheels; separate package on openSUSE
+    PKGS="python3 python3-pip NetworkManager iw tcpdump polkit libxcb-cursor0 libgthread-2_0-0"
     INSTALL_CMD="sudo zypper install -y"
 fi
 

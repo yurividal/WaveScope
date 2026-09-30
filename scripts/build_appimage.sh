@@ -87,6 +87,19 @@ if [ -n "$PY_LIBDIR" ] && [ -n "$PY_LDLIB" ] && [ -f "$PY_LIBDIR/$PY_LDLIB" ]; t
     cp -a "$PY_LIBDIR/$PY_LDLIB" "$PY_RUNTIME/lib64/"
 fi
 
+# ── 3c. Bundle libgthread-2.0 ───────────────────────────────────────────────
+# The PyPI Qt 6 wheels link libgthread-2.0.so.0.  openSUSE ships it as a
+# separate package (libgthread-2_0-0) that minimal installs lack, and it is
+# *not* on the AppImage excludelist (pkg2appimage/excludelist lists it as
+# "bundle").  It is a tiny compatibility shim over the host's libglib-2.0,
+# so bundling it is safe; glib/gobject themselves stay host-provided.
+GTHREAD_LIB="$(ldconfig -p | awk '/libgthread-2\.0\.so\.0 .*x86-64/ {print $NF; exit}')"
+if [ -n "$GTHREAD_LIB" ] && [ -f "$GTHREAD_LIB" ]; then
+    cp -L "$GTHREAD_LIB" "$PY_RUNTIME/lib/libgthread-2.0.so.0"
+else
+    echo "WARNING: libgthread-2.0.so.0 not found on the build host; not bundled"
+fi
+
 # ── 4. Internal launcher ─────────────────────────────────────────────────────
 cat > "$APPDIR/usr/bin/${APP_ID}" <<'EOF'
 #!/usr/bin/env bash

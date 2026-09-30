@@ -234,7 +234,7 @@ from .theme import (
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.9.7"
+VERSION = "2.0.0"
 APP_NAME = "WaveScope"
 
 

@@ -64,14 +64,11 @@
   <content_rating type="oars-1.1" />
 
   <releases>
-    <release version="1.9.7" date="2026-09-30">
-      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v1.9.7</url>
-    </release>
-    <release version="1.9.6" date="2026-09-30">
+    <release version="2.0.0" date="2026-09-30">
       <description>
-        <p>AppImage now runs on glibc 2.35 (Ubuntu 22.04) and newer; release packages are uploaded reliably.</p>
+        <p>802.11 parsing correctness pass, hardened packet capture, Wi-Fi 6E/7 detail (320 MHz, puncturing, MLD, PSC, 6 GHz AP power type), RF analysis (channel congestion, BSS color collisions, roam candidates), per-radio SSID grouping in the channel graph, and saved settings.</p>
       </description>
-      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v1.9.6</url>
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v2.0.0</url>
     </release>
   </releases>
 </component>

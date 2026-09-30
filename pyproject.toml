@@ -7,7 +7,7 @@
 
 [project]
 name = "wavescope"
-version = "1.9.7"
+version = "2.0.0"
 description = "Modern WiFi analyzer for Linux"
 readme = "README.md"
 license = "MIT"

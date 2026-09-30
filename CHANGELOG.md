@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.9.7 — 2026-09-30
+## v2.0.0 — 2026-09-30
 
 Full correctness pass over the 802.11 parsing, plus Wi-Fi 6E/7 and RF-analysis features. iw and nmcli formats were checked against their upstream sources (iw `scan.c`/`util.c`/`station.c`/`link.c`, NetworkManager `nmcli/devices.c`, hostap `ieee802_11_defs.h`, Wireshark's 802.11 dissector).
 
@@ -51,6 +51,9 @@ Full correctness pass over the 802.11 parsing, plus Wi-Fi 6E/7 and RF-analysis f
 - **AP grouping** — locally-administered BSSID variants now group with their base MAC.
 
 ### Packaging & repo
+- **AppImage on minimal openSUSE** — the PyPI Qt 6 wheels need `libgthread-2.0.so.0`, a separate package on openSUSE; the AppImage now bundles it (it is not on the AppImage excludelist) and `install.sh` lists `libgthread-2_0-0` for zypper.
+- **AppImage failed to start on Ubuntu 22.04 and older distros** — it bundles the build machine's Python, and the release job had moved to Ubuntu 24.04 (glibc 2.38). It is now built on Ubuntu 22.04 and needs only glibc 2.35, as the AppImage catalog test (AppImage/appimage.github.io#8302) requires.
+- **Release packages missing from v1.9.5** — the AppImage and openSUSE RPM uploads raced to create the GitHub release; a `create-release` job now runs first.
 - **.deb could not start the app** — pyqtgraph imports `PyQt6.uic`, which on Debian/Ubuntu lives in `pyqt6-dev-tools`; now a dependency. The .deb requires Debian 12+ / Ubuntu 24.04+ (documented).
 - **Fedora RPM could not install** — `python3-qt6` does not exist on Fedora 44; now `python3-pyqt6`.
 - Install-time venv setup is non-fatal with a recovery command (`sudo /opt/wavescope/setup-venv.sh`) and uses pinned `constraints.txt`.
@@ -59,12 +62,6 @@ Full correctness pass over the 802.11 parsing, plus Wi-Fi 6E/7 and RF-analysis f
 - `install.sh` supports apt, dnf and zypper and checks for `nmcli`/`iw`/`tcpdump`/`pkexec`.
 - Release CI: manual re-run for an existing tag (`workflow_dispatch`), pinned `fedora:44`, lint job (ruff + compileall).
 - README updated (install commands matching real asset names, openSUSE section, dependencies, features); CONTRIBUTING.md, issue template and `pyproject.toml` added.
-
-## v1.9.6 — 2026-09-30
-
-### Fixes
-- **AppImage failed to start on Ubuntu 22.04 and older distros** — the AppImage bundles the build machine's Python interpreter, and the release job had moved to Ubuntu 24.04 (`ubuntu-latest`), so the AppImage required glibc 2.38. It is now built on Ubuntu 22.04 and needs only glibc 2.35. This is what the AppImage catalog test (AppImage/appimage.github.io#8302) reported.
-- **Release packages missing from v1.9.5** — the AppImage and openSUSE RPM uploads failed because the four build jobs raced to create the GitHub release. A dedicated `create-release` job now runs first and every build job uploads to it.
 
 ## v1.9.5 — 2026-09-17
 
