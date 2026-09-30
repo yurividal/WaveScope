@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.9.6 — 2026-09-30
+
+### Fixes
+- **AppImage failed to start on Ubuntu 22.04 and older distros** — the AppImage bundles the build machine's Python interpreter, and the release job had moved to Ubuntu 24.04 (`ubuntu-latest`), so the AppImage required glibc 2.38. It is now built on Ubuntu 22.04 and needs only glibc 2.35. This is what the AppImage catalog test (AppImage/appimage.github.io#8302) reported.
+- **Release packages missing from v1.9.5** — the AppImage and openSUSE RPM uploads failed because the four build jobs raced to create the GitHub release. A dedicated `create-release` job now runs first and every build job uploads to it.
+
+## v1.9.5 — 2026-09-17
+
+### New Features
+- **Cisco Meraki detection from vendor IE** — APs that advertise the Meraki vendor-specific IE (OUI `00:18:6e`) are now labelled "Cisco Meraki" even when their BSSID OUI is missing from the local OUI database, which is common on newer hardware.
+
 ## v1.9.4 — 2026-07-22
 
 ### New Features
