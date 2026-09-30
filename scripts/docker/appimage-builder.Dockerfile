@@ -1,4 +1,7 @@
-FROM ubuntu:24.04
+# Oldest still-supported Ubuntu LTS: the bundled python3 inherits this
+# image's glibc as the minimum for every AppImage user.  Keep in sync
+# with the build-appimage runner in .github/workflows/release.yml.
+FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG APPIMAGETOOL_URL=https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
