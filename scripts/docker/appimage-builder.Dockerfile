@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     file \
     desktop-file-utils \
+    appstream \
     libglib2.0-bin \
     && rm -rf /var/lib/apt/lists/*
 

@@ -22,14 +22,62 @@ class APTableModel(QAbstractTableModel):
             self._color_idx += 1
         return self._ssid_colors[key]
 
+    # Emitted after update() when rows were added or removed (not on a pure
+    # value refresh) — used to re-fit column widths only when needed.
+    rows_changed = pyqtSignal()
+
     def update(self, aps: List[AccessPoint]):
-        self.beginResetModel()
-        self._aps = sorted(aps, key=lambda a: -a.signal)
+        """Apply a new scan as a BSSID-keyed diff instead of a model reset.
+
+        Rows that persist keep their position and only emit dataChanged, so
+        the view keeps its selection, current index and scroll position, and
+        the sort proxy only moves rows whose sort key actually changed.
+        """
         # Eagerly assign colors so ssid_colors() is always fully populated
         # before the graph widgets request them.
-        for ap in self._aps:
+        for ap in aps:
             self._color_for_ssid(ap.ssid)
-        self.endResetModel()
+
+        new_by_key = {ap.bssid.lower(): ap for ap in aps}
+        structural = False
+
+        # 1. Remove vanished rows, highest index first, in contiguous runs.
+        gone = [i for i, ap in enumerate(self._aps) if ap.bssid.lower() not in new_by_key]
+        while gone:
+            end = gone.pop()
+            start = end
+            while gone and gone[-1] == start - 1:
+                start = gone.pop()
+            self.beginRemoveRows(QModelIndex(), start, end)
+            del self._aps[start:end + 1]
+            self.endRemoveRows()
+            structural = True
+
+        # 2. Replace surviving rows in place.
+        for i, old_ap in enumerate(self._aps):
+            self._aps[i] = new_by_key.pop(old_ap.bssid.lower())
+        if self._aps:
+            self.dataChanged.emit(
+                self.index(0, 0), self.index(len(self._aps) - 1, len(TABLE_HEADERS) - 1)
+            )
+
+        # 3. Append new rows (the proxy sorts them into place).
+        if new_by_key:
+            first = len(self._aps)
+            self.beginInsertRows(QModelIndex(), first, first + len(new_by_key) - 1)
+            self._aps.extend(new_by_key.values())
+            self.endInsertRows()
+            structural = True
+
+        if structural:
+            self.rows_changed.emit()
+
+    def row_of_bssid(self, bssid: str) -> int:
+        key = (bssid or "").lower()
+        for i, ap in enumerate(self._aps):
+            if ap.bssid.lower() == key:
+                return i
+        return -1
 
     def rowCount(self, parent=QModelIndex()):
         return len(self._aps)
@@ -57,6 +105,25 @@ class APTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ToolTipRole:
             if col == COL_SEC:
                 return ap.security_tooltip
+            if col == COL_CISCO_PWR:
+                pwr, src = ap.power_level
+                if pwr is None:
+                    return None
+                tip = f"Source: {src}"
+                if ap.power_constraint_db:
+                    tip += f"\nPower Constraint: {ap.power_constraint_db} dB"
+                return tip
+            if col == COL_DBM:
+                return "Exact RSSI from iw" if ap.dbm_exact is not None else (
+                    "Estimated from nmcli signal % (iw data unavailable)"
+                )
+            if col == COL_CHAN:
+                notes = []
+                if ap.is_psc:
+                    notes.append("6 GHz Preferred Scanning Channel (PSC)")
+                if ap.is_dfs:
+                    notes.append("DFS channel (radar detection required)")
+                return "\n".join(notes) or None
             return None
 
         if role == Qt.ItemDataRole.DecorationRole:
@@ -74,10 +141,9 @@ class APTableModel(QAbstractTableModel):
                 c = QColor(self._color_for_ssid(ap.ssid))
                 c.setAlpha(230)
                 return QBrush(c)
-            if col == COL_SIG:
-                return QBrush(signal_color(ap.signal))
-            if col == COL_DBM:
-                return QBrush(signal_color(ap.signal))
+            if col in (COL_SIG, COL_DBM):
+                # Same dBm thresholds as the graph axes (see dbm_color).
+                return QBrush(dbm_color(ap.dbm))
             if col == COL_INUSE:
                 return QBrush(QColor(SIG_EXCELLENT)) if ap.in_use else None
             if col == COL_GEN:
@@ -97,7 +163,9 @@ class APTableModel(QAbstractTableModel):
                 sec = ap.security_short
                 if sec == "Open" or sec == "":
                     return QBrush(QColor(SIG_POOR))
-                if "WPA3" in sec or "WPA2+WPA3" in sec:
+                if sec in ("WEP", "Unknown") or sec.startswith("WPA (") or sec.startswith("Open"):
+                    return QBrush(QColor(SIG_POOR))
+                if "WPA3" in sec or sec == "OWE":
                     return QBrush(QColor(SIG_EXCELLENT))
             return None
 
@@ -177,7 +245,8 @@ class APTableModel(QAbstractTableModel):
         if col == COL_GEN:
             if ap.wifi_gen:
                 return ap.wifi_gen
-            return "Legacy" if ap.phy_mode in ("A", "B/G") else ""
+            # "Legacy" only when iw decoded the BSS and found no HT+ IEs.
+            return "Legacy" if ap.iw_seen and ap.phy_mode in ("A", "B/G") else ""
         if col == COL_UTIL:
             pct = ap.chan_util_pct
             return f"{pct}%" if pct is not None else ""
@@ -188,16 +257,10 @@ class APTableModel(QAbstractTableModel):
         if col == COL_APNAME:
             return ap.ap_name
         if col == COL_CISCO_PWR:
-            pwr = (
-                ap.cisco_tx_power_dbm
-                if ap.cisco_tx_power_dbm is not None
-                else ap.ruckus_tx_power_dbm
-                if ap.ruckus_tx_power_dbm is not None
-                else ap.tpc_tx_power_dbm
-            )
+            pwr, _src = ap.power_level
             if pwr is None:
                 return ""
-            return f"{pwr:.1f} dBm" if isinstance(pwr, float) else f"{pwr} dBm"
+            return f"{pwr:g} dBm"
         return ""
 
     def ap_at(self, row: int) -> Optional[AccessPoint]:
@@ -224,7 +287,6 @@ class APFilterProxy(QSortFilterProxyModel):
         # Known-SSID filter
         self._known_ssids: frozenset = frozenset()     # current snapshot from store
         self._known_filter: str = "off"                # "off" | "only" | "hide"
-        self.setSortRole(Qt.ItemDataRole.UserRole + 1)
 
     # ── Band / text ─────────────────────────────────────────────────────
     def set_band(self, band: str):
@@ -359,7 +421,7 @@ class APFilterProxy(QSortFilterProxyModel):
                 return False
         # AP-group filters (checked before column filters for short-circuit speed)
         if self._ap_group_include is not None or self._ap_group_excludes:
-            gk = ap_group_key(ap.bssid)
+            gk = ap_group_key_for(ap)
             if self._ap_group_include is not None and gk != self._ap_group_include:
                 return False
             if gk in self._ap_group_excludes:

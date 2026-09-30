@@ -1,0 +1,91 @@
+name: Bug report
+description: Something in WaveScope is broken or shows wrong data
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Scan results depend heavily on the WiFi adapter,
+        driver and tool versions, so please fill in the environment fields.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start WaveScope
+        2. Click ...
+        3. See ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: WaveScope version
+      description: Shown in the window title.
+      placeholder: "1.9.7"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - .deb package
+        - .rpm package (Fedora/RHEL)
+        - .rpm package (openSUSE)
+        - AppImage
+        - From source (install.sh)
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: distro
+    attributes:
+      label: Distribution and version
+      description: "Output of `grep PRETTY_NAME /etc/os-release`, plus desktop (KDE/GNOME/...) and X11 or Wayland."
+      placeholder: "openSUSE Tumbleweed, KDE Plasma 6, Wayland"
+    validations:
+      required: true
+
+  - type: textarea
+    id: tools
+    attributes:
+      label: Tool versions
+      description: "Output of `nmcli --version` and `iw --version` (use `/usr/sbin/iw --version` if iw is not on PATH)."
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: adapter
+    attributes:
+      label: WiFi adapter and driver
+      description: "PCIe adapters: `lspci -k | grep -A3 -i network`. USB adapters: `lsusb`. Optionally also `iw dev`."
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal output
+      description: Start WaveScope from a terminal (`wavescope`, or `./WaveScope-*.AppImage`) and paste any errors or tracebacks.
+      render: text
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Drag and drop images here if they help show the problem.

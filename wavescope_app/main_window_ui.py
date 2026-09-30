@@ -73,6 +73,7 @@ class MainWindowUIMixin:
             self._interval_combo.addItem(f"{s}s", s)
         self._interval_combo.setFixedWidth(58)
         self._interval_combo.setToolTip("Scan refresh interval")
+        self._interval_combo.setCurrentIndex(REFRESH_INTERVALS.index(2) if 2 in REFRESH_INTERVALS else 0)
         self._interval_combo.currentIndexChanged.connect(self._on_interval_change)
 
         self._linger_spin = QSpinBox()
@@ -214,6 +215,7 @@ class MainWindowUIMixin:
 
         # Vertical splitter: table on top, graphs on bottom
         splitter = QSplitter(Qt.Orientation.Vertical)
+        self._v_splitter = splitter  # saved/restored via QSettings
         self._h_splitter.addWidget(splitter)
         self._h_splitter.setCollapsible(1, False)
         self._h_splitter.setStretchFactor(0, 0)
@@ -360,6 +362,15 @@ class MainWindowUIMixin:
             "phy_caps",
             "he_features",
             "signal",
+            "congestion",
+            "bss_color",
+            "punct",
+            "ap_power_6g",
+            "mld",
+            "rnr",
+            "tx_limits",
+            "basic_rates",
+            "last_seen",
             "max_rate",
             "security",
             "wpa_flags",
@@ -369,6 +380,10 @@ class MainWindowUIMixin:
             "akm_raw",
             "wps_manufacturer",
             "pmf",
+            "rsnx",
+            "group_mgmt",
+            "owe_pair",
+            "mobility_domain",
             "chan_util",
             "clients",
             "roaming",
@@ -390,6 +405,15 @@ class MainWindowUIMixin:
             "PHY Capability Summary",
             "HE/EHT Features",
             "Signal (RSSI)",
+            "Channel Congestion",
+            "BSS Color (HE)",
+            "Punctured Subchannels (EHT)",
+            "6 GHz AP Power Type",
+            "Multi-Link (MLD MAC)",
+            "Co-located APs (RNR)",
+            "TX Power Limits",
+            "Basic Rates",
+            "Last Seen",
             "Max PHY Rate",
             "Security Profile",
             "WPA IE",
@@ -399,6 +423,10 @@ class MainWindowUIMixin:
             "AKM Suites",
             "WPS Manufacturer (IE)",
             "PMF / 802.11w",
+            "RSNX (SAE extensions)",
+            "Group Mgmt Cipher (BIP)",
+            "OWE Transition Pair",
+            "Mobility Domain (802.11r)",
             "Channel Utilization (BSS Load)",
             "Station Count (BSS Load)",
             "Roaming Features (802.11k/v/r)",
@@ -421,6 +449,15 @@ class MainWindowUIMixin:
             "phy_caps",
             "he_features",
             "signal",
+            "congestion",
+            "bss_color",
+            "punct",
+            "ap_power_6g",
+            "mld",
+            "rnr",
+            "tx_limits",
+            "basic_rates",
+            "last_seen",
         ]
         _DET_RIGHT_KEYS = [
             "max_rate",
@@ -432,6 +469,10 @@ class MainWindowUIMixin:
             "akm_raw",
             "wps_manufacturer",
             "pmf",
+            "rsnx",
+            "group_mgmt",
+            "owe_pair",
+            "mobility_domain",
             "chan_util",
             "clients",
             "roaming",
@@ -571,6 +612,8 @@ class MainWindowUIMixin:
             "rsn_caps",
             "vendor_ies",
             "signal",
+            "snr",
+            "signal_chains",
             "iface",
             "rx_phy",
             "tx_phy",
@@ -592,6 +635,7 @@ class MainWindowUIMixin:
             "noise_floor",
             "inactive",
             "connected_time",
+            "roam",
         ]
         _CONN_LABELS = [
             "Connection State",
@@ -608,6 +652,8 @@ class MainWindowUIMixin:
             "RSN Capabilities",
             "Vendor IEs (OUIs)",
             "Signal (Connected AP)",
+            "SNR (signal − noise)",
+            "Signal per Antenna Chain",
             "Interface",
             "RX PHY",
             "TX PHY",
@@ -629,6 +675,7 @@ class MainWindowUIMixin:
             "Noise Floor",
             "Inactive Time",
             "Connected Time",
+            "Roam Candidates (same SSID)",
         ]
         _CONN_LEFT_KEYS = [
             "status",
@@ -645,6 +692,8 @@ class MainWindowUIMixin:
             "rsn_caps",
             "vendor_ies",
             "signal",
+            "snr",
+            "signal_chains",
         ]
 
         self._conn_vals: dict[str, QLabel] = {}

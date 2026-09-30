@@ -35,12 +35,19 @@ fi
 rm -rf "$BUILD_DIR"
 mkdir -p \
     "$APPDIR/usr/bin" \
+    "$APPDIR/usr/share/applications" \
+    "$APPDIR/usr/share/icons/hicolor/scalable/apps" \
+    "$APPDIR/usr/share/metainfo" \
     "$APP_PREFIX" \
     "$PY_RUNTIME/lib" \
     "$PY_RUNTIME/lib64"
 
 # ── 2. Copy application files ───────────────────────────────────────────────
-cp -a "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$REPO_ROOT/assets" "$REPO_ROOT/wavescope_app" "$APP_PREFIX/"
+cp -a "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$REPO_ROOT/constraints.txt" \
+      "$REPO_ROOT/assets" "$REPO_ROOT/wavescope_app" "$APP_PREFIX/"
+# Never ship stale bytecode from the developer's tree
+find "$APP_PREFIX" -name '__pycache__' -type d -prune -exec rm -rf {} +
+find "$APP_PREFIX" -name '*.py[co]' -delete
 [ -f "$REPO_ROOT/LICENSE" ] && cp "$REPO_ROOT/LICENSE" "$APP_PREFIX/" || true
 [ -f "$REPO_ROOT/README.md" ] && cp "$REPO_ROOT/README.md" "$APP_PREFIX/" || true
 
@@ -49,7 +56,8 @@ cp -a "$REPO_ROOT/main.py" "$REPO_ROOT/requirements.txt" "$REPO_ROOT/assets" "$R
 # at runtime (important for AppImage portability).
 python3 -m venv --copies "$APP_PREFIX/.venv"
 "$APP_PREFIX/.venv/bin/python" -m pip install --upgrade pip -q
-"$APP_PREFIX/.venv/bin/python" -m pip install -r "$APP_PREFIX/requirements.txt" -q
+"$APP_PREFIX/.venv/bin/python" -m pip install -q \
+    -r "$APP_PREFIX/requirements.txt" -c "$APP_PREFIX/constraints.txt"
 
 # ── 3b. Bundle Python runtime (stdlib + libpython) for portability ─────────
 PY_STDLIB_SRC="$(python3 - <<'PY'
@@ -106,7 +114,9 @@ exec "$HERE/usr/bin/wavescope" "$@"
 EOF
 chmod 0755 "$APPDIR/AppRun"
 
-cat > "$APPDIR/${APP_ID}.desktop" <<EOF
+# Desktop file + icon live in the standard XDG locations (for AppStream and
+# desktop integration tools); appimagetool also needs copies at the AppDir root.
+cat > "$APPDIR/usr/share/applications/${APP_ID}.desktop" <<EOF
 [Desktop Entry]
 Name=${APP_NAME}
 Comment=Modern WiFi Analyzer for Linux
@@ -114,15 +124,35 @@ Exec=${APP_ID}
 Icon=${APP_ID}
 Terminal=false
 Type=Application
-Categories=Network;Utility;
+Categories=Network;Monitor;
 Keywords=wifi;wireless;network;analyzer;
 StartupWMClass=wavescope
 EOF
+cp "$APPDIR/usr/share/applications/${APP_ID}.desktop" "$APPDIR/${APP_ID}.desktop"
 
+cp "$REPO_ROOT/assets/icon.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/${APP_ID}.svg"
 cp "$REPO_ROOT/assets/icon.svg" "$APPDIR/${APP_ID}.svg"
 
+# AppStream metainfo (launchable desktop-id must match the desktop file above)
+cp "$REPO_ROOT/assets/io.github.yurividal.WaveScope.appdata.xml" "$APPDIR/usr/share/metainfo/"
+
+# ── 5b. Validate metadata ───────────────────────────────────────────────────
+# appimagetool only looks for usr/share/metainfo/<desktop-basename>.appdata.xml
+# (i.e. wavescope.appdata.xml), but AppStream requires the metainfo filename to
+# match the reverse-DNS component id (metainfo-filename-cid-mismatch).  The
+# desktop id must stay wavescope.desktop (main.py setDesktopFileName), so we
+# validate the tree ourselves and run appimagetool with --no-appstream.
+if command -v desktop-file-validate >/dev/null 2>&1; then
+    desktop-file-validate "$APPDIR/usr/share/applications/${APP_ID}.desktop"
+fi
+if command -v appstreamcli >/dev/null 2>&1; then
+    appstreamcli validate-tree --no-net "$APPDIR"
+else
+    echo "NOTE: appstreamcli not found; skipping AppStream metainfo validation"
+fi
+
 # ── 6. Build AppImage ───────────────────────────────────────────────────────
-appimagetool "$APPDIR" "$REPO_ROOT/$OUTPUT_FILE"
+appimagetool --no-appstream "$APPDIR" "$REPO_ROOT/$OUTPUT_FILE"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

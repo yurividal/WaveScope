@@ -4,8 +4,43 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # Manual re-run for an existing tag (e.g. to re-upload a missing asset).
+  # Builds from that tag's commit, not from the branch the run starts on.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to (re)build, e.g. v1.9.7"
+        required: true
+        type: string
+
+# Tag being released: the pushed tag, or the workflow_dispatch input
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
+  # ── Lint: syntax errors / undefined names only (config in pyproject.toml) ─
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Byte-compile
+        run: python3 -m compileall -q wavescope_app main.py
+
+      - name: Ruff
+        run: |
+          python3 -m pip install --quiet "ruff==0.16.9"
+          ruff check
+
   # ── Create the GitHub release once, before any package uploads ────────────
   # The four build jobs run in parallel and each used to call
   # softprops/action-gh-release against a release that might not exist yet,
@@ -13,6 +48,7 @@ jobs:
   # (most likely how v1.9.5 lost its AppImage and openSUSE RPM).  Creating the
   # release here first means every later upload attaches to an existing one.
   create-release:
+    needs: lint
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,7 +57,10 @@ jobs:
       - name: Create release (no assets yet)
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          tag_name: ${{ env.RELEASE_TAG }}
+          # Only on tag push: on a manual re-run the release already has
+          # notes, and softprops would append a second generated copy.
+          generate_release_notes: ${{ github.event_name == 'push' }}
 
   # ── Debian / Ubuntu ─────────────────────────────────────────────────────────
   build-deb:
@@ -33,13 +72,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install dpkg-dev
         run: sudo apt-get install -y dpkg-dev
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build .deb
         run: |
@@ -50,26 +91,30 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: wavescope_${{ steps.version.outputs.VERSION }}_all.deb
-          generate_release_notes: true
+          tag_name: ${{ env.RELEASE_TAG }}
 
   # ── Fedora / RHEL ────────────────────────────────────────────────────────────
   build-rpm:
     needs: create-release
     runs-on: ubuntu-latest
-    container: fedora:latest
+    # Pinned (not :latest) so a new Fedora release cannot silently change the
+    # build environment.  Bump deliberately.
+    container: fedora:44
     permissions:
       contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install rpm-build
         run: dnf install -y rpm-build
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build .rpm
         run: |
@@ -80,7 +125,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: wavescope-*.noarch.rpm
-          generate_release_notes: true
+          tag_name: ${{ env.RELEASE_TAG }}
 
   # ── openSUSE ──────────────────────────────────────────────────────────────────
   build-opensuse:
@@ -93,13 +138,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install rpm-build
         run: zypper --non-interactive install rpm-build tar gzip
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Build openSUSE .rpm
         run: |
@@ -113,7 +160,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: wavescope-*.opensuse.noarch.rpm
-          generate_release_notes: true
+          tag_name: ${{ env.RELEASE_TAG }}
 
   # ── AppImage ───────────────────────────────────────────────────────────────
   build-appimage:
@@ -130,13 +177,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Install appimagetool
+      - name: Install appimagetool + metadata validators
         run: |
+          # appstreamcli / desktop-file-validate: build_appimage.sh validates
+          # the AppDir metadata with them (same as the Docker builder image)
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq appstream desktop-file-utils
           wget -qO appimagetool-x86_64.AppImage \
             https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
@@ -153,4 +206,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: WaveScope-${{ steps.version.outputs.VERSION }}-x86_64.AppImage
-          generate_release_notes: true
+          tag_name: ${{ env.RELEASE_TAG }}

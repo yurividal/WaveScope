@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata for WaveScope.  Shipped as
+     /usr/share/metainfo/io.github.yurividal.WaveScope.appdata.xml in the
+     .deb, .rpm and AppImage.  Add a <release> entry for every new version. -->
+<component type="desktop-application">
+  <id>io.github.yurividal.WaveScope</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>WaveScope</name>
+  <summary>Modern WiFi analyzer for Linux</summary>
+
+  <developer id="io.github.yurividal">
+    <name>WaveScope Contributors</name>
+  </developer>
+
+  <description>
+    <p>
+      WaveScope is a real-time WiFi analyzer for Linux desktops. It scans the
+      wireless networks around you through NetworkManager and iw and shows
+      signal strength, channel occupancy, security modes, WiFi generations
+      and manufacturer data.
+    </p>
+    <ul>
+      <li>Per-band channel graphs for 2.4 GHz, 5 GHz and 6 GHz, with DFS channel markers</li>
+      <li>Rolling signal history per access point</li>
+      <li>Detailed AP metadata: security and AKM, WiFi generation, channel width, channel utilization, connected clients, 802.11k/v/r roaming support</li>
+      <li>AP names and TX power read from Cisco, Aruba, Ubiquiti and Ruckus vendor IEs</li>
+      <li>AP group sidebar that groups the radios of one physical access point</li>
+      <li>Manufacturer lookup from the IEEE OUI database, WPS data and vendor IEs, with vendor icons</li>
+      <li>Monitor-mode and managed-mode packet capture to Wireshark-compatible pcap files</li>
+      <li>Dark, light and automatic themes</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">wavescope.desktop</launchable>
+
+  <url type="homepage">https://github.com/yurividal/WaveScope</url>
+  <url type="bugtracker">https://github.com/yurividal/WaveScope/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window with access point table and channel graphs</caption>
+      <image>https://raw.githubusercontent.com/yurividal/WaveScope/main/assets/screenshot.png</image>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>Network</category>
+    <category>Monitor</category>
+  </categories>
+
+  <keywords>
+    <keyword>wifi</keyword>
+    <keyword>wireless</keyword>
+    <keyword>analyzer</keyword>
+    <keyword>spectrum</keyword>
+  </keywords>
+
+  <provides>
+    <binary>wavescope</binary>
+  </provides>
+
+  <content_rating type="oars-1.1" />
+
+  <releases>
+    <release version="1.9.7" date="2026-09-30">
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v1.9.7</url>
+    </release>
+    <release version="1.9.6" date="2026-09-30">
+      <description>
+        <p>AppImage now runs on glibc 2.35 (Ubuntu 22.04) and newer; release packages are uploaded reliably.</p>
+      </description>
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v1.9.6</url>
+    </release>
+  </releases>
+</component>

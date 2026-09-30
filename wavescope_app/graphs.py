@@ -287,8 +287,11 @@ class ChannelGraphWidget(QWidget):
         # band → PlotWidget (rebuilt whenever active band set changes)
         self._plots: Dict[str, PlotWidget] = {}
         self._active_bands: List[str] = []
-        # bssid → {color, zero, fill, curve, label}
+        # bssid → {band, color, zero, fill, curve, label}; items persist across
+        # scans and are updated in place with setData (no scene churn).
         self._items: Dict[str, dict] = {}
+        # band → static decoration items (DFS strip, band label, PSC markers)
+        self._static_items: Dict[str, List[object]] = {}
         self._aps: List[AccessPoint] = []
         self._ssid_colors: Dict[str, QColor] = {}
         self._band = "All"
@@ -299,6 +302,9 @@ class ChannelGraphWidget(QWidget):
         self._view_ranges: Dict[
             str, Tuple[Tuple[float, float], Tuple[float, float]]
         ] = {}
+        # (band, channel) → ChannelStats, supplied by the main window
+        self._channel_stats: Dict[Tuple[str, int], object] = {}
+        self._collisions: set = set()  # bssids (lower) with a BSS-color collision
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -312,7 +318,7 @@ class ChannelGraphWidget(QWidget):
             for ax in ("left", "bottom"):
                 pw.getAxis(ax).setTextPen(fg)
                 pw.getAxis(ax).setPen(fg)
-        # Redraw so band-label TextItems inside the plot pick up the new fg
+            self._draw_static(band, pw)  # band-label colour follows the theme
         self._redraw()
 
     def set_band(self, band: str):
@@ -321,6 +327,11 @@ class ChannelGraphWidget(QWidget):
 
     def set_ssid_colors(self, colors: Dict[str, QColor]):
         self._ssid_colors = colors
+
+    def set_analysis(self, channel_stats: Dict[Tuple[str, int], object], collisions: set) -> None:
+        """Channel congestion (hover tooltip) and BSS-color collisions (label ⚠)."""
+        self._channel_stats = channel_stats
+        self._collisions = {b.lower() for b in collisions}
 
     def update_aps(self, aps: List[AccessPoint], colors: Dict[str, QColor]):
         self._aps = aps
@@ -370,28 +381,73 @@ class ChannelGraphWidget(QWidget):
         pw.scene().sigMouseMoved.connect(
             lambda pos, b=band, p=pw: self._on_mouse_hover(b, p, pos)
         )
+
+        # Axes ticks never change for a band — set them once per panel.
+        floor = CHAN_DBM_FLOOR
+        pw.getAxis("left").setTicks([[(v, str(v)) for v in range(floor, CHAN_DBM_CEIL + 1, 10)]])
+        xmin, xmax = self._BAND_EXTENTS[band]
+        tick_src = self._BAND_TICKS[band]
+        self._band_channels[band] = {
+            float(f): c for c, f in tick_src.items() if xmin <= f <= xmax
+        }
+        stride = self._BAND_TICK_STRIDE.get(band, 1)
+        sorted_chan = sorted(tick_src.items(), key=lambda x: x[1])
+        ticks = [
+            (f, str(c))
+            for i, (c, f) in enumerate(sorted_chan)
+            if xmin <= f <= xmax and i % stride == 0
+        ]
+        if ticks:
+            subband_ticks = [
+                (((x0 + x1) / 2.0), "\n" + lbl)
+                for x0, x1, _c, lbl in _BAND_SUBBAND_HEADERS.get(band, [])
+                if xmin <= ((x0 + x1) / 2.0) <= xmax
+            ]
+            pw.getAxis("bottom").setTicks([sorted(ticks + subband_ticks, key=lambda t: t[0])])
+
+        vr = self._view_ranges.get(band)
+        if vr:
+            (x0, x1), (y0, y1) = vr
+            pw.setXRange(x0, x1, padding=0.0)
+            pw.setYRange(y0, y1, padding=0.0)
+        else:
+            pw.setXRange(xmin, xmax, padding=0.01)
+            pw.setYRange(floor, CHAN_DBM_CEIL, padding=0.0)
         return pw
 
     def _rebuild_panels(self, bands: List[str]):
-        for pw in self._plots.values():
+        # Remember zoom/pan so a band-set change doesn't reset the user's view.
+        for band, pw in self._plots.items():
+            try:
+                xr, yr = pw.getViewBox().viewRange()
+                self._view_ranges[band] = (
+                    (float(xr[0]), float(xr[1])),
+                    (float(yr[0]), float(yr[1])),
+                )
+            except Exception:
+                pass
             self._panels_layout.removeWidget(pw)
             pw.setParent(None)
             pw.deleteLater()
         self._plots.clear()
+        self._items.clear()  # their plots are gone
+        self._static_items.clear()
 
         for i, band in enumerate(bands):
             pw = self._make_plot(band, i == 0)
             self._panels_layout.addWidget(pw, self._BAND_STRETCH.get(band, 3))
             self._plots[band] = pw
+            self._draw_static(band, pw)
 
         self._active_bands = list(bands)
 
-    # ── Sub-band header strips ────────────────────────────────────────────────
+    # ── Static overlays (DFS strip, PSC markers, band label) ─────────────────
 
-    def _draw_band_overlays(
-        self, band: str, pw: "PlotWidget", xmin: float, xmax: float
-    ):
-        """Band name label in the top-right corner."""
+    def _draw_static(self, band: str, pw: "PlotWidget") -> None:
+        for item in self._static_items.pop(band, []):
+            pw.removeItem(item)
+        items: List[object] = []
+        xmin, xmax = self._BAND_EXTENTS[band]
         floor = float(CHAN_DBM_FLOOR)
 
         # 5 GHz DFS highlight (ch52..144): draw directly on the plot floor so it
@@ -408,23 +464,37 @@ class ChannelGraphWidget(QWidget):
                     pen=pg.mkPen(dfs_color, width=2),
                 )
                 dfs_line.setZValue(20)
-                pw.addItem(dfs_line)
-
-                # Small label to explain the highlighted DFS range.
-                dfs_lbl_color = QColor(dfs_color)
-                dfs_lbl_color.setAlpha(240)
-                dfs_lbl = pg.TextItem(
-                    text="DFS (52–144)",
-                    anchor=(0.5, 1.0),
-                    color=dfs_lbl_color,
-                )
+                items.append(dfs_line)
+                dfs_lbl = pg.TextItem(text="DFS (52–144)", anchor=(0.5, 1.0), color=dfs_color)
                 dfs_font = QFont()
                 dfs_font.setPointSize(7)
                 dfs_font.setBold(True)
                 dfs_lbl.setFont(dfs_font)
                 dfs_lbl.setPos((dfs_lo + dfs_hi) / 2.0, floor + 0.1)
                 dfs_lbl.setZValue(21)
-                pw.addItem(dfs_lbl)
+                items.append(dfs_lbl)
+
+        # 6 GHz Preferred Scanning Channels: small markers on the floor.
+        if band == "6 GHz":
+            psc_c = QColor(self._theme_fg)
+            psc_c.setAlpha(170)
+            xs = [CH6[c] for c in sorted(PSC_6GHZ_CHANNELS) if c in CH6]
+            psc = pg.ScatterPlotItem(
+                x=xs,
+                y=[floor + 1.2] * len(xs),
+                symbol="t1",
+                size=7,
+                pen=pg.mkPen(None),
+                brush=pg.mkBrush(psc_c),
+            )
+            psc.setZValue(20)
+            items.append(psc)
+            psc_lbl = pg.TextItem(text="▲ PSC", anchor=(0.0, 1.0), color=psc_c)
+            pf = QFont()
+            pf.setPointSize(7)
+            psc_lbl.setFont(pf)
+            psc_lbl.setPos(xmin + 4, floor + 0.1)
+            items.append(psc_lbl)
 
         # -- band name label, just inside top-right corner --
         band_color = QColor(self._theme_fg)
@@ -437,7 +507,11 @@ class ChannelGraphWidget(QWidget):
         # anchor (1.0, 0.0) pins top-right of text to this point → text hangs downward
         band_lbl.setPos(xmax, float(CHAN_DBM_CEIL) - 1.0)
         band_lbl.setZValue(5)
-        pw.addItem(band_lbl)
+        items.append(band_lbl)
+
+        for item in items:
+            pw.addItem(item)
+        self._static_items[band] = items
 
     def _on_label_click(self, bssid: str):
         self._highlighted = None if self._highlighted == bssid else bssid
@@ -481,11 +555,16 @@ class ChannelGraphWidget(QWidget):
             return
         nearest_f = min(channels, key=lambda f: abs(f - freq))
         if abs(nearest_f - freq) < 25:
-            QToolTip.showText(
-                QCursor.pos(),
-                f"Channel {channels[nearest_f]}  ·  {int(nearest_f)} MHz",
-                pw,
-            )
+            ch = channels[nearest_f]
+            lines = [f"Channel {ch}  ·  {int(nearest_f)} MHz"]
+            if band == "6 GHz" and ch in PSC_6GHZ_CHANNELS:
+                lines.append("Preferred Scanning Channel (PSC)")
+            if band == "5 GHz" and ch in DFS_5GHZ_CHANNELS:
+                lines.append("DFS channel")
+            st = self._channel_stats.get((band, ch))
+            if st is not None:
+                lines.append(st.summary())
+            QToolTip.showText(QCursor.pos(), "\n".join(lines), pw)
         else:
             QToolTip.hideText()
 
@@ -495,73 +574,52 @@ class ChannelGraphWidget(QWidget):
         present = {a.band for a in visible if a.band in self._BAND_EXTENTS}
         return [b for b in self._BANDS_ORDER if b in present]
 
+    @staticmethod
+    def _shape(ap: AccessPoint) -> Tuple[np.ndarray, np.ndarray, float]:
+        """(xs, ys, draw_center) of one AP's occupancy shape.
+
+        Only the AP's own span is sampled (≈ 2 points/MHz) instead of the
+        whole band, and EHT-punctured 20 MHz subchannels drop to the floor.
+        """
+        floor = float(CHAN_DBM_FLOOR)
+        bw = float(max(ap.bandwidth_mhz, 20))
+        center = get_ap_draw_center(ap)
+        xs = np.linspace(center - bw / 2.0, center + bw / 2.0, int(bw * 2) + 1)
+        unit = _channel_shape_unit(xs, center, bw)
+        for lo, hi in punctured_subchannels(center, int(bw), ap.punct_bitmap):
+            unit[(xs > lo) & (xs < hi)] = 0.0
+        ys = floor + (ap.dbm - floor) * unit
+        return xs, ys, center
+
     def _redraw(self):
-        self._items = {}
         visible = [a for a in self._aps if self._band == "All" or a.band == self._band]
         needed = self._needed_bands(visible)
-
-        # Capture current per-band view ranges before any clear/rebuild so zoom/pan
-        # persists across refreshes.
-        for band, pw in self._plots.items():
-            try:
-                xr, yr = pw.getViewBox().viewRange()
-                self._view_ranges[band] = (
-                    (float(xr[0]), float(xr[1])),
-                    (float(yr[0]), float(yr[1])),
-                )
-            except Exception:
-                pass
-
         if needed != self._active_bands:
             self._rebuild_panels(needed)
-
-        for pw in self._plots.values():
-            pw.clear()
-
-        # If no bands are needed at all (unknown band selected) bail out.
-        # Do NOT bail when visible is empty — we still need correct axes.
         if not needed:
             return
 
-        floor = CHAN_DBM_FLOOR
-        y_ticks = [(v, str(v)) for v in range(floor, CHAN_DBM_CEIL + 1, 10)]
-
-        for band, pw in self._plots.items():
-            band_aps = [a for a in visible if a.band == band]
-            xmin, xmax = self._BAND_EXTENTS[band]
-            xs = np.linspace(xmin, xmax, 2000)
-            floor_ys = np.full_like(xs, float(floor))
-            tick_src = self._BAND_TICKS[band]
-
-            for ap in band_aps:
-                color = self._ssid_colors.get(ap.ssid, QColor(FALLBACK_GRAY))
-                # Use the bonded-block center for 5 GHz (not just primary channel)
-                draw_center = get_ap_draw_center(ap)
-                unit = _channel_shape_unit(xs, draw_center, max(ap.bandwidth_mhz, 20))
-                active = unit > 1e-6
-                if not np.any(active):
-                    continue
-                xs_act = xs[active]
-                unit_act = unit[active]
-                ys = floor + (ap.dbm - floor) * unit
-                ys_act = floor + (ap.dbm - floor) * unit_act
-                floor_ys_act = np.full_like(xs_act, float(floor))
-
-                bc = QColor(color)
-                bc.setAlpha(55)
-                zero_item = pg.PlotCurveItem(xs_act, floor_ys_act, pen=pg.mkPen(None))
-                curve_item = pg.PlotCurveItem(
-                    xs_act, ys_act, pen=mkPen(color=color, width=2)
-                )
-                fill_item = pg.FillBetweenItem(zero_item, curve_item, brush=mkBrush(bc))
-                pw.addItem(zero_item)
-                pw.addItem(fill_item)
-                pw.addItem(curve_item)
-
+        floor = float(CHAN_DBM_FLOOR)
+        seen: set = set()
+        for ap in visible:
+            pw = self._plots.get(ap.band)
+            if pw is None:
+                continue
+            xs, ys, center = self._shape(ap)
+            color = self._ssid_colors.get(ap.ssid, QColor(FALLBACK_GRAY))
+            text = ("⚠ " if ap.bssid.lower() in self._collisions else "") + ap.display_ssid
+            items = self._items.get(ap.bssid)
+            if items is not None and items["band"] != ap.band:
+                self._remove_items(ap.bssid)
+                items = None
+            if items is None:
+                zero_item = pg.PlotCurveItem(xs, np.full_like(xs, floor), pen=pg.mkPen(None))
+                curve_item = pg.PlotCurveItem(xs, ys, pen=mkPen(color=color, width=2))
+                fill_item = pg.FillBetweenItem(zero_item, curve_item, brush=mkBrush(color))
                 label = _ClickableLabel(
                     bssid=ap.bssid,
                     on_click=self._on_label_click,
-                    text=ap.display_ssid,
+                    text=text,
                     color=color,
                     anchor=(0.5, 1.1),
                 )
@@ -569,52 +627,41 @@ class ChannelGraphWidget(QWidget):
                 lf.setPointSize(8)
                 lf.setBold(True)
                 label.setFont(lf)
-                label.setPos(draw_center, ap.dbm)
-                pw.addItem(label)
-
-                self._items[ap.bssid] = {
+                for it in (zero_item, fill_item, curve_item, label):
+                    pw.addItem(it)
+                items = {
+                    "band": ap.band,
                     "color": color,
                     "zero": zero_item,
                     "fill": fill_item,
                     "curve": curve_item,
                     "label": label,
+                    "text": text,
                 }
-
-            pw.getAxis("left").setTicks([y_ticks])
-            self._band_channels[band] = {
-                float(f): c for c, f in tick_src.items() if xmin <= f <= xmax
-            }
-            # Build channel ticks
-            stride = self._BAND_TICK_STRIDE.get(band, 1)
-            sorted_chan = sorted(tick_src.items(), key=lambda x: x[1])
-            ticks = [
-                (f, str(c))
-                for i, (c, f) in enumerate(sorted_chan)
-                if xmin <= f <= xmax and i % stride == 0
-            ]
-            if ticks:
-                subband_ticks = [
-                    (((x0 + x1) / 2.0), "\n" + lbl)
-                    for x0, x1, _c, lbl in _BAND_SUBBAND_HEADERS.get(band, [])
-                    if xmin <= ((x0 + x1) / 2.0) <= xmax
-                ]
-                mixed_ticks = sorted(ticks + subband_ticks, key=lambda t: t[0])
-                pw.getAxis("bottom").setTicks([mixed_ticks])
-
-            # ── Band-specific spectrum annotations ─────────────────────────
-            self._draw_band_overlays(band, pw, xmin, xmax)
-
-            # Restore last user zoom/pan if available, otherwise use defaults.
-            vr = self._view_ranges.get(band)
-            if vr:
-                (x0, x1), (y0, y1) = vr
-                pw.setXRange(x0, x1, padding=0.0)
-                pw.setYRange(y0, y1, padding=0.0)
+                self._items[ap.bssid] = items
             else:
-                pw.setXRange(xmin, xmax, padding=0.01)
-                pw.setYRange(floor, CHAN_DBM_CEIL, padding=0.0)
+                items["zero"].setData(xs, np.full_like(xs, floor))
+                items["curve"].setData(xs, ys)  # FillBetweenItem follows via sigPlotChanged
+                items["color"] = color
+                if items["text"] != text:
+                    items["label"].setText(text)
+                    items["text"] = text
+            items["label"].setPos(center, ap.dbm)
+            seen.add(ap.bssid)
 
+        for bssid in [b for b in self._items if b not in seen]:
+            self._remove_items(bssid)
         self._apply_highlight()
+
+    def _remove_items(self, bssid: str) -> None:
+        items = self._items.pop(bssid, None)
+        if not items:
+            return
+        pw = self._plots.get(items["band"])
+        if pw is None:
+            return
+        for key in ("zero", "fill", "curve", "label"):
+            pw.removeItem(items[key])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -691,14 +738,31 @@ class SignalHistoryWidget(QWidget):
         self._ssid_colors = colors
 
     def filter_bssids(self, bssids: Optional[set]):
+        if bssids == self._filter_bssids:
+            return
         self._filter_bssids = bssids
+        # Redraw immediately so a table selection shows at once, not on the
+        # next scan.
+        self._redraw(time.time() - self._t0)
 
     def push(self, aps: List[AccessPoint]):
         now = time.time()
         elapsed = now - self._t0
         for ap in aps:
+            if ap.is_lingering:
+                continue  # a ghost's dBm is stale; don't extend its trace
             self._ssid_map[ap.bssid] = ap.display_ssid
             self._history[ap.bssid].append((elapsed, ap.dbm))  # store dBm
+        # Prune samples (and whole BSSIDs) older than the visible window so a
+        # long walk-around survey doesn't grow memory and the legend forever.
+        cutoff = elapsed - HISTORY_SECONDS
+        for bssid in list(self._history.keys()):
+            dq = self._history[bssid]
+            while dq and dq[0][0] < cutoff:
+                dq.popleft()
+            if not dq:
+                del self._history[bssid]
+                self._ssid_map.pop(bssid, None)
         self._redraw(elapsed)
 
     def _redraw(self, now_t: float):
@@ -712,19 +776,22 @@ class SignalHistoryWidget(QWidget):
                 self._plot.removeItem(self._curves.pop(bssid))
                 self._curve_data.pop(bssid, None)
 
-        # Left legend/list (outside plot area)
-        self._ssid_list.clear()
+        # Left legend/list (outside plot area) — rebuilt only when its
+        # content changes, so the list doesn't flicker or lose its scroll.
         sorted_bssids = sorted(
             visible_bssids,
             key=lambda b: (self._ssid_map.get(b, b).lower(), b),
         )
-        for bssid in sorted_bssids:
-            ssid = self._ssid_map.get(bssid, bssid)
-            item = QListWidgetItem(f"{ssid} ({bssid[-5:]})")
-            item.setToolTip(bssid)
-            color = self._ssid_colors.get(ssid, QColor(FALLBACK_GRAY))
-            item.setForeground(QBrush(color))
-            self._ssid_list.addItem(item)
+        legend = [(b, self._ssid_map.get(b, b)) for b in sorted_bssids]
+        if legend != getattr(self, "_legend_cache", None):
+            self._legend_cache = legend
+            self._ssid_list.clear()
+            for bssid, ssid in legend:
+                item = QListWidgetItem(f"{ssid} ({bssid[-5:]})")
+                item.setToolTip(bssid)
+                color = self._ssid_colors.get(ssid, QColor(FALLBACK_GRAY))
+                item.setForeground(QBrush(color))
+                self._ssid_list.addItem(item)
 
         for bssid in visible_bssids:
             pts = list(self._history[bssid])

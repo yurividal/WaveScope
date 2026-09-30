@@ -6,6 +6,7 @@ and detail/connection rendering methods for the main window.
 
 from .core import *
 from .core_vendor import _resolve_vendor_icon_path
+from .core_scanner import _IW_COPY_FIELDS, _CONN_COPY_FIELDS
 from .graphs import ChannelAllocationsDialog
 from .capture import CaptureTypeDialog, ManagedCaptureWindow, MonitorModeWindow
 from .known_ssids import KnownSSIDStore, KnownSSIDDialog
@@ -65,129 +66,27 @@ class MainWindowLogicMixin:
         shown = self._proxy.rowCount()
         self._lbl_count.setText(f"  {shown}/{len(self._aps)} APs")
 
-    def _capture_selection_bssids(self) -> Tuple[set[str], Optional[str]]:
-        """Return ({selected_bssids}, focused_bssid) from the current table selection."""
+    def _refresh_selected_details(self) -> None:
+        """Re-render the Details tab for the current selection after a scan.
+
+        The table model applies scans as an in-place diff, so the selection
+        survives on its own; only the details text needs refreshing.
+        """
         sm = self._table.selectionModel()
-        if sm is None:
-            return set(), None
+        if sm is not None and sm.selectedRows():
+            self._on_selection_change(None, None)
 
-        selected_bssids: set[str] = set()
-        for proxy_idx in sm.selectedRows():
-            src_idx = self._proxy.mapToSource(proxy_idx)
-            ap = self._model.ap_at(src_idx.row())
-            if ap is not None:
-                selected_bssids.add(ap.bssid)
-
-        focused_bssid: Optional[str] = None
-        cur_proxy = sm.currentIndex()
-        if cur_proxy.isValid():
-            src_idx = self._proxy.mapToSource(cur_proxy)
-            ap = self._model.ap_at(src_idx.row())
-            if ap is not None:
-                focused_bssid = ap.bssid
-
-        return selected_bssids, focused_bssid
-
-    def _restore_selection_bssids(
-        self, selected_bssids: set[str], focused_bssid: Optional[str]
-    ) -> None:
-        """Restore table selection by BSSID after a model reset."""
-        sm = self._table.selectionModel()
-        if sm is None:
-            return
-
-        sm.blockSignals(True)
-        try:
-            sm.clearSelection()
-            first_idx = QModelIndex()
-            preferred_idx = QModelIndex()
-
-            for row in range(self._model.rowCount()):
-                ap = self._model.ap_at(row)
-                if ap is None or ap.bssid not in selected_bssids:
-                    continue
-
-                proxy_idx = self._proxy.mapFromSource(self._model.index(row, 0))
-                if not proxy_idx.isValid():
-                    continue
-
-                sm.select(
-                    proxy_idx,
-                    QItemSelectionModel.SelectionFlag.Select
-                    | QItemSelectionModel.SelectionFlag.Rows,
-                )
-
-                if not first_idx.isValid():
-                    first_idx = proxy_idx
-                if focused_bssid and ap.bssid == focused_bssid:
-                    preferred_idx = proxy_idx
-
-            current = preferred_idx if preferred_idx.isValid() else first_idx
-            if current.isValid():
-                sm.setCurrentIndex(
-                    current,
-                    QItemSelectionModel.SelectionFlag.Current
-                    | QItemSelectionModel.SelectionFlag.Rows,
-                )
-                self._table.scrollTo(
-                    current,
-                    QAbstractItemView.ScrollHint.PositionAtCenter,
-                )
-        finally:
-            sm.blockSignals(False)
-
-        self._on_selection_change(None, None)
-
-    # Fields populated exclusively by enrich_with_iw — persist across missed cycles
-    _IW_PERSIST_FIELDS = (
-        "dbm_exact",
-        "manufacturer",
-        "manufacturer_source",
-        "wps_manufacturer",
-        "wifi_gen",
-        "chan_util",
-        "station_count",
-        "pmf",
-        "akm",
-        "akm_raw",
-        "rrm",
-        "btm",
-        "ft",
-        "country",
-        "iw_center_freq",
-        "beacon_interval_tu",
-        "dtim_period",
-        "rsn_capabilities",
-        "vendor_ie_ouis",
-        "phy_cap_summary",
-        "he_eht_features",
-        "ap_name",
-        "cisco_tx_power_dbm",
-        "ruckus_tx_power_dbm",
-        "tpc_tx_power_dbm",
-        "conn_iface",
-        "conn_link_ssid",
-        "conn_link_freq_mhz",
-        "conn_link_signal_dbm",
-        "conn_rx_bitrate",
-        "conn_tx_bitrate",
-        "conn_expected_tp",
-        "conn_signal_avg_dbm",
-        "conn_tx_retries",
-        "conn_tx_failed",
-        "conn_inactive_ms",
-        "conn_connected_time_s",
-        "conn_tx_packets",
-        "conn_tx_bytes",
-        "conn_rx_packets",
-        "conn_rx_bytes",
-        "conn_rx_drop_misc",
-        "conn_rx_phy",
-        "conn_tx_phy",
+    # Fields populated exclusively by enrich_with_iw — persist across up to
+    # 5 cycles in which iw misses the BSS.  The live RSSI (dbm_exact) and the
+    # iw "last seen" age are deliberately excluded: restoring them would freeze
+    # the dBm column while nmcli's signal keeps moving.
+    _IW_PERSIST_FIELDS = tuple(
+        f for f in _IW_COPY_FIELDS if f not in ("dbm_exact", "last_seen_ms", "iw_seen")
+    ) + ("manufacturer", "manufacturer_source")
+    # Connected-session telemetry is only restored for the in-use AP.
+    _CONN_PERSIST_FIELDS = tuple(_CONN_COPY_FIELDS) + (
         "conn_tx_retry_rate_pct",
         "conn_tx_fail_rate_pct",
-        "conn_survey_busy_pct",
-        "conn_survey_noise_dbm",
     )
 
     # Fields where 0 / "" / None means "parse failed" — once we get a real
@@ -248,34 +147,39 @@ class MainWindowLogicMixin:
 
             required.append(max(min_w, w))
 
-        widths = required[:]
+        # Columns the user dragged keep their width; hidden columns take none.
+        user_cols = getattr(self, "_user_sized_cols", set())
+        hidden = {c for c in range(col_count) if self._table.isColumnHidden(c)}
+        fixed = user_cols | hidden
+        widths = [
+            self._table.columnWidth(c) if c in user_cols else (0 if c in hidden else required[c])
+            for c in range(col_count)
+        ]
+        auto_cols = [c for c in range(col_count) if c not in fixed]
 
-        # If there's remaining room, distribute it across all columns
+        # If there's remaining room, distribute it across the auto-sized columns
         total = sum(widths)
-        if total < viewport_w:
+        if total < viewport_w and auto_cols:
             extra = viewport_w - total
-            weight_sum = sum(required) or col_count
-            adds = [int(extra * (w / weight_sum)) for w in required]
-            widths = [w + a for w, a in zip(widths, adds)]
-
+            weight_sum = sum(required[c] for c in auto_cols) or len(auto_cols)
+            for c in auto_cols:
+                widths[c] += int(extra * (required[c] / weight_sum))
             # Rounding fix-up: spread leftover pixels across columns
             rem = viewport_w - sum(widths)
-            if rem > 0:
-                order = sorted(
-                    range(col_count), key=lambda i: required[i], reverse=True
-                )
-                for i in range(rem):
-                    widths[order[i % col_count]] += 1
+            order = sorted(auto_cols, key=lambda i: required[i], reverse=True)
+            for i in range(max(0, rem)):
+                widths[order[i % len(order)]] += 1
 
         self._suspend_col_resize_tracking = True
         try:
-            for col, w in enumerate(widths):
-                self._table.setColumnWidth(col, max(min_w, w))
+            for col in auto_cols:
+                self._table.setColumnWidth(col, max(min_w, widths[col]))
         finally:
             self._suspend_col_resize_tracking = False
 
     def _on_data(self, aps: List[AccessPoint]):
-        selected_bssids, focused_bssid = self._capture_selection_bssids()
+        if self.sender() is not None and self.sender() is not self._scanner:
+            return  # late emission from a scanner that is shutting down
 
         # ── sticky-nonzero field restoration ────────────────────────────────
         # For nmcli/iw fields that can transiently return 0/""/None even though
@@ -292,15 +196,11 @@ class MainWindowLogicMixin:
                     setattr(ap, field, cache[field])
 
         # ── iw-field persistence ─────────────────────────────────────────────
-        # pmf is set to "No" / "Optional" / "Required" by iw for every AP it
-        # sees; a blank pmf means iw missed this AP on this cycle.
+        # iw_seen marks BSSs decoded from iw's scan cache on this cycle.
         for ap in aps:
             key = ap.bssid.lower()
-            if ap.pmf != "":
-                # iw enriched this AP — refresh cache, reset miss counter
-                self._iw_cache[key] = {
-                    f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS
-                }
+            if ap.iw_seen:
+                self._iw_cache[key] = {f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS}
                 self._iw_miss[key] = 0
             elif key in self._iw_cache and self._iw_miss.get(key, 0) < 5:
                 # iw missed this AP but we have recent data — restore it
@@ -321,9 +221,7 @@ class MainWindowLogicMixin:
                 and ap.conn_tx_failed is not None
             ):
                 d_pkts = ap.conn_tx_packets - prev.get("tx_packets", ap.conn_tx_packets)
-                d_retry = ap.conn_tx_retries - prev.get(
-                    "tx_retries", ap.conn_tx_retries
-                )
+                d_retry = ap.conn_tx_retries - prev.get("tx_retries", ap.conn_tx_retries)
                 d_fail = ap.conn_tx_failed - prev.get("tx_failed", ap.conn_tx_failed)
                 if d_pkts > 0 and d_retry >= 0 and d_fail >= 0:
                     ap.conn_tx_retry_rate_pct = (d_retry / d_pkts) * 100.0
@@ -340,32 +238,36 @@ class MainWindowLogicMixin:
                     "tx_failed": ap.conn_tx_failed,
                 }
 
-            if key in self._iw_cache:
-                self._iw_cache[key] = {
-                    f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS
-                }
+        # ── evict per-BSSID caches for BSSs no longer listed ─────────────
+        # `aps` already includes lingering BSSs, so this only drops entries
+        # past the linger window — the caches stay bounded on long surveys.
+        live = {ap.bssid.lower() for ap in aps}
+        for cache in (self._sticky_cache, self._iw_cache, self._iw_miss, self._conn_counter_prev):
+            for key in [k for k in cache if k not in live]:
+                del cache[key]
         # ────────────────────────────────────────────────────────────────────
+
+        # ── cross-AP analysis ────────────────────────────────────────────
+        self._channel_stats = compute_channel_stats(aps)
+        self._color_collisions = find_bss_color_collisions(aps)
+        self._channel_graph.set_analysis(self._channel_stats, set(self._color_collisions))
+
         self._aps = aps
         self._model.update(aps)
-        if selected_bssids:
-            self._restore_selection_bssids(selected_bssids, focused_bssid)
-        # model.update() emits modelReset (not layoutChanged), so the proxy's
-        # layoutChanged won't fire — update the graph explicitly here.
+        self._refresh_selected_details()
+        # Explicit graph refresh: a pure value update (no rows added/removed)
+        # does not trigger the proxy's filter signals.
         self._channel_graph.update_aps(self._visible_aps(), self._model.ssid_colors())
         self._history_graph.set_ssid_colors(self._model.ssid_colors())
         self._history_graph.push(aps)
-        self._auto_size_table_columns()
 
-        # Show AP Name column only when at least one AP has a name resolved
+        # Show AP Name / Power columns only when at least one AP has a value
         any_ap_name = any(ap.ap_name for ap in aps)
-        self._table.setColumnHidden(COL_APNAME, not any_ap_name)
-        any_cisco_pwr = any(
-            ap.cisco_tx_power_dbm is not None
-            or ap.ruckus_tx_power_dbm is not None
-            or ap.tpc_tx_power_dbm is not None
-            for ap in aps
-        )
-        self._table.setColumnHidden(COL_CISCO_PWR, not any_cisco_pwr)
+        any_pwr = any(ap.power_level[0] is not None for ap in aps)
+        if self._table.isColumnHidden(COL_APNAME) == any_ap_name or self._table.isColumnHidden(COL_CISCO_PWR) == any_pwr:
+            self._table.setColumnHidden(COL_APNAME, not any_ap_name)
+            self._table.setColumnHidden(COL_CISCO_PWR, not any_pwr)
+            self._auto_size_table_columns()
 
         # Update the AP sidebar (skips rebuild if groups haven't changed)
         self._ap_sidebar.update_groups(aps)
@@ -375,7 +277,11 @@ class MainWindowLogicMixin:
         self._lbl_count.setText(f"  {shown}/{total} APs")
         ts = time.strftime("%H:%M:%S")
         self._lbl_updated.setText(f"  Last scan: {ts}  ")
-        self.statusBar().showMessage(f"Found {total} access points  |  Showing {shown}")
+        msg = f"Found {total} access points  |  Showing {shown}"
+        if self._color_collisions:
+            n = len(self._color_collisions)
+            msg += f"  |  ⚠ BSS color collision on {n} BSS{'s' if n != 1 else ''} (see Details)"
+        self.statusBar().showMessage(msg)
         self._show_connection()
         # Hide the first-scan overlay once data arrives for the first time
         if hasattr(self, "_scan_overlay") and self._scan_overlay.isVisible():
@@ -498,6 +404,10 @@ class MainWindowLogicMixin:
         """Record that the user explicitly resized this column."""
         if getattr(self, "_suspend_col_resize_tracking", False):
             return
+        # Hiding/unhiding a column also emits sectionResized (to/from 0);
+        # that is not a user drag.
+        if new_size == 0 or old_size == 0 or self._table.isColumnHidden(col):
+            return
         self._user_sized_cols.add(col)
 
     def resizeEvent(self, event):
@@ -505,31 +415,51 @@ class MainWindowLogicMixin:
         self._auto_size_table_columns()
 
     def _on_band_change(self, band: str):
-        self._proxy.set_band(
-            band
-        )  # → invalidateFilter → layoutChanged → _on_filter_changed
+        self._proxy.set_band(band)  # → rows removed/inserted → _on_filter_changed
         self._channel_graph.set_band(band)
 
     def _on_interval_change(self, idx: int):
-        secs = REFRESH_INTERVALS[idx]
-        self._scanner.set_interval(secs)
+        if self._scanner is not None:
+            self._scanner.set_interval(REFRESH_INTERVALS[idx])
 
     def _on_linger_change(self, secs: int):
-        self._scanner.set_linger_secs(float(secs))
+        if self._scanner is not None:
+            self._scanner.set_linger_secs(float(secs))
+
+    # ── Scanner lifecycle ────────────────────────────────────────────────
+
+    def _start_scanner(self) -> None:
+        """Create and start a scanner using the current toolbar settings."""
+        self._scanner = WiFiScanner(
+            interval_sec=REFRESH_INTERVALS[self._interval_combo.currentIndex()],
+            linger_secs=float(self._linger_spin.value()),
+        )
+        self._scanner.data_ready.connect(self._on_data)
+        self._scanner.scan_error.connect(self._on_error)
+        self._scanner.start()
+
+    def _stop_scanner(self, wait_ms: Optional[int] = 3000) -> None:
+        """Stop the current scanner without ever dropping a running QThread.
+
+        If it has not finished within *wait_ms* it is parked in
+        _retired_scanners until its `finished` signal fires, so Python never
+        garbage-collects a live QThread ("Destroyed while thread is still
+        running" abort).
+        """
+        sc, self._scanner = self._scanner, None
+        if sc is None:
+            return
+        if not sc.stop(wait_ms):
+            self._retired_scanners.append(sc)
+            sc.finished.connect(lambda s=sc: self._retired_scanners.remove(s) if s in self._retired_scanners else None)
 
     def _on_pause(self, paused: bool):
         if paused:
-            self._scanner.stop()
+            self._stop_scanner()
             self._btn_pause.setText("▶ Resume")
             self.statusBar().showMessage("Paused — click Resume to continue scanning")
         else:
-            self._scanner = WiFiScanner(
-                interval_sec=REFRESH_INTERVALS[self._interval_combo.currentIndex()],
-                linger_secs=float(self._linger_spin.value()),
-            )
-            self._scanner.data_ready.connect(self._on_data)
-            self._scanner.scan_error.connect(self._on_error)
-            self._scanner.start()
+            self._start_scanner()
             self._btn_pause.setText("⏸ Pause")
             self.statusBar().showMessage("Resumed scanning…")
 
@@ -646,7 +576,7 @@ class MainWindowLogicMixin:
         ]
 
         # AP group key + label for this BSSID
-        _ap_gkey = ap_group_key(ap.bssid)
+        _ap_gkey = ap_group_key_for(ap)
         _ap_glabel = ap_group_display_label(_ap_gkey, ap.manufacturer)
 
         # Show only
@@ -722,14 +652,17 @@ class MainWindowLogicMixin:
 
         # Details shortcut
         det = menu.addAction("ℹ  View details")
-        det.triggered.connect(lambda: self._open_details_for_proxy_row(idx.row()))
+        # Capture the BSSID, not the row: a scan can re-sort the table while
+        # the menu is open, and the row would then point at another AP.
+        det.triggered.connect(lambda checked=False, b=ap.bssid: self._open_details_for_bssid(b))
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
-    def _open_details_for_proxy_row(self, proxy_row: int) -> None:
-        if proxy_row < 0:
+    def _open_details_for_bssid(self, bssid: str) -> None:
+        src_row = self._model.row_of_bssid(bssid)
+        if src_row < 0:
             return
-        proxy_idx = self._proxy.index(proxy_row, 0)
+        proxy_idx = self._proxy.mapFromSource(self._model.index(src_row, 0))
         if not proxy_idx.isValid():
             return
 
@@ -848,7 +781,8 @@ class MainWindowLogicMixin:
 
     def _show_details(self, ap: AccessPoint):
         color = self._model.ssid_colors().get(ap.ssid, QColor(FALLBACK_GRAY)).name()
-        sig_col = signal_color(ap.signal).name()
+        sig_col = dbm_color(ap.dbm).name()
+        esc = html.escape  # SSIDs, AP names, WPS strings come from beacons
 
         def badge(text, bg=None, fg=None):
             color = fg or bg
@@ -872,7 +806,7 @@ class MainWindowLogicMixin:
             else ""
         )
         self._det_ssid.setText(
-            f'<span style="font-size:20px;font-weight:700;color:{color}">{ap.display_ssid}</span>{in_use}'
+            f'<span style="font-size:20px;font-weight:700;color:{color}">{esc(ap.display_ssid)}</span>{in_use}'
         )
 
         # ── WiFi generation ───────────────────────────────────────────────
@@ -944,9 +878,10 @@ class MainWindowLogicMixin:
         if not sec_display:
             sec_display = "Open"
 
-        if sec_display == "Open":
+        sec_display = esc(sec_display)
+        if sec_display.startswith("Open") or sec_display in ("WEP", "Unknown"):
             sec_html = badge(sec_display, SEC_BAD)
-        elif "WPA3" in sec_display or "SAE" in sec_display:
+        elif "WPA3" in sec_display or "SAE" in sec_display or sec_display == "OWE":
             sec_html = badge(sec_display, SEC_WPA3)
         elif "WPA2" in sec_display:
             sec_html = badge(sec_display, SEC_WPA2)
@@ -1080,10 +1015,10 @@ class MainWindowLogicMixin:
             if icon_path is not None:
                 v["manufacturer"].setText(
                     f"<img src='{icon_path.as_uri()}' height='16' "
-                    f"style='vertical-align:middle;'> &nbsp;{manuf_text}"
+                    f"style='vertical-align:middle;'> &nbsp;{esc(manuf_text)}"
                 )
             else:
-                v["manufacturer"].setText(manuf_text)
+                v["manufacturer"].setText(esc(manuf_text))
         else:
             v["manufacturer"].setText(dim("Unknown"))
         manuf_tip = f"Source: {manuf_source}"
@@ -1093,9 +1028,26 @@ class MainWindowLogicMixin:
         v["wifi_gen"].setText(gen_html)
         v["mode_80211"].setText(ap.phy_mode)
         v["band"].setText(ap.band)
-        v["channel"].setText(str(ap.channel))
-        v["frequency"].setText(f"{ap.freq_mhz} MHz")
-        v["chan_width"].setText(f"{ap.bandwidth_mhz} MHz")
+        ch_notes = []
+        if ap.is_psc:
+            ch_notes.append("PSC")
+        if ap.is_dfs:
+            ch_notes.append("DFS")
+        span = get_ap_channel_span(ap)
+        ch_text = str(ap.channel)
+        if span != str(ap.channel):
+            ch_text += f"  ·  block {span}"
+        if ch_notes:
+            ch_text += f"  {dim('(' + ', '.join(ch_notes) + ')')}"
+        v["channel"].setText(ch_text)
+        center = get_ap_draw_center(ap)
+        freq_text = f"{ap.freq_mhz} MHz (primary)"
+        if ap.bandwidth_mhz > 20 and int(center) != ap.freq_mhz:
+            freq_text += f"  ·  {int(center)} MHz block center"
+        v["frequency"].setText(freq_text)
+        v["chan_width"].setText(
+            f"{ap.bandwidth_mhz} MHz" + (" (80+80, non-contiguous)" if ap.iw_80p80 else "")
+        )
         v["country"].setText(ap.country or dim("Unknown"))
         v["beacon_interval"].setText(
             f"{ap.beacon_interval_tu} TU"
@@ -1116,15 +1068,15 @@ class MainWindowLogicMixin:
         sec_line_top = sec_html
         sec_secondary = sec_raw if sec_display == sec_derived else sec_derived
         if should_show_secondary_line(sec_display, sec_secondary):
-            sec_line_bottom = dim(sec_secondary)
+            sec_line_bottom = dim(esc(sec_secondary))
             v["security"].setText(f"{sec_line_top}<br>{sec_line_bottom}")
         else:
             v["security"].setText(sec_line_top)
         v["security"].setToolTip("")
         v["wpa_flags"].setText(format_ie_flags(ap.wpa_flags, "WPA IE not present"))
         v["rsn_flags"].setText(format_ie_flags(ap.rsn_flags, "RSN IE not present"))
-        v["rsn_caps"].setText(ap.rsn_capabilities or dim("Not advertised"))
-        v["vendor_ies"].setText(ap.vendor_ie_ouis or dim("Not advertised"))
+        v["rsn_caps"].setText(esc(ap.rsn_capabilities) or dim("Not advertised"))
+        v["vendor_ies"].setText(esc(ap.vendor_ie_ouis) or dim("Not advertised"))
         v["wpa_flags"].setToolTip(raw_ie_or_dim(ap.wpa_flags, "WPA IE not present"))
         v["rsn_flags"].setToolTip(raw_ie_or_dim(ap.rsn_flags, "RSN IE not present"))
         akm_compact = (ap.akm or "").strip()
@@ -1139,7 +1091,7 @@ class MainWindowLogicMixin:
         else:
             v["akm_raw"].setText(dim("AKM unknown"))
         v["akm_raw"].setToolTip("")
-        v["wps_manufacturer"].setText(ap.wps_manufacturer or dim("Not advertised"))
+        v["wps_manufacturer"].setText(esc(ap.wps_manufacturer) or dim("Not advertised"))
         v["pmf"].setText(pmf_html)
         v["chan_util"].setText(util_html)
         v["clients"].setText(
@@ -1147,20 +1099,118 @@ class MainWindowLogicMixin:
         )
         v["roaming"].setText(kvr_html)
         if "ap_name" in v:
-            v["ap_name"].setText(ap.ap_name or dim("Not advertised"))
+            v["ap_name"].setText(esc(ap.ap_name) or dim("Not advertised"))
         if "cisco_tx_power" in v:
-            pwr = (
-                ap.cisco_tx_power_dbm
-                if ap.cisco_tx_power_dbm is not None
-                else ap.ruckus_tx_power_dbm
-                if ap.ruckus_tx_power_dbm is not None
-                else ap.tpc_tx_power_dbm
-            )
+            pwr, src = ap.power_level
             v["cisco_tx_power"].setText(
-                (f"{pwr:.1f} dBm" if isinstance(pwr, float) else f"{pwr} dBm")
-                if pwr is not None
-                else dim("Not advertised")
+                f"{pwr:g} dBm  {dim('(' + src + ')')}" if pwr is not None else dim("Not advertised")
             )
+
+        # ── RF analysis & extended IEs ────────────────────────────────────
+        st = ap_congestion(ap, self._channel_stats)
+        if st is not None:
+            sc = SIG_POOR if st.score >= 70 else SIG_WEAK if st.score >= 45 else SIG_FAIR if st.score >= 25 else SIG_EXCELLENT
+            v["congestion"].setText(
+                f'<span style="color:{sc};font-weight:700">{st.score}/100</span> '
+                + dim(
+                    f"ch {st.channel}: {st.bss_count} overlapping BSS, "
+                    f"{st.strong_count} ≥ {CCA_PD_THRESHOLD_DBM} dBm"
+                    + (f", max util {st.max_util_pct}%" if st.max_util_pct is not None else "")
+                    + " · heuristic"
+                )
+            )
+        else:
+            v["congestion"].setText(dim("—"))
+
+        if ap.bss_color is None:
+            v["bss_color"].setText(dim("Not advertised (pre-802.11ax)"))
+        else:
+            txt = f"{ap.bss_color}" + (" (coloring disabled)" if ap.bss_color_disabled else "")
+            others = self._color_collisions.get(ap.bssid.lower(), [])
+            if others:
+                names = ", ".join(esc(o.display_ssid) + f" ({o.bssid[-5:]}, ch {o.channel})" for o in others[:4])
+                txt = (
+                    f'<span style="color:{SIG_POOR};font-weight:700">{txt} — collision</span><br>'
+                    + dim(f"Same color on overlapping channel: {names}")
+                )
+            v["bss_color"].setText(txt)
+
+        subs = punctured_subchannels(get_ap_draw_center(ap), ap.bandwidth_mhz, ap.punct_bitmap)
+        v["punct"].setText(
+            ", ".join(f"{int(lo)}–{int(hi)} MHz" for lo, hi in subs) + dim(f"  (bitmap 0x{ap.punct_bitmap:04X})")
+            if subs
+            else dim("None" if ap.wifi_gen == "WiFi 7" else "N/A (pre-802.11be)")
+        )
+        v["ap_power_6g"].setText(esc(ap.he_6ghz_ap_type) or dim("N/A" if ap.band != "6 GHz" else "Not advertised"))
+
+        if ap.mld_mac:
+            links = [a for a in self._aps if a.mld_mac == ap.mld_mac and a.bssid != ap.bssid]
+            link_txt = ", ".join(f"{a.band} ch {a.channel}" for a in links)
+            v["mld"].setText(ap.mld_mac + (f"<br>{dim('Other links seen: ' + link_txt)}" if link_txt else ""))
+        else:
+            v["mld"].setText(dim("Not advertised"))
+
+        if ap.rnr_neighbors:
+            seen = {a.bssid.lower() for a in self._aps}
+            rows = []
+            for n in ap.rnr_neighbors[:8]:
+                op = int(n.get("op_class", 0))
+                band_lbl = "6 GHz" if op in (131, 132, 133, 134, 135, 136, 137) else f"op class {op}"
+                b = str(n.get("bssid", "")) or "?"
+                flags = []
+                if n.get("same_ssid"):
+                    flags.append("same SSID")
+                if n.get("colocated"):
+                    flags.append("co-located")
+                if b != "?" and b not in seen:
+                    flags.append("not seen by this adapter")
+                rows.append(f"{band_lbl} ch {n.get('channel')} · {b}" + (f" {dim('(' + ', '.join(flags) + ')')}" if flags else ""))
+            v["rnr"].setText("<br>".join(rows))
+        else:
+            v["rnr"].setText(dim("No Reduced Neighbor Report"))
+
+        limits = []
+        if ap.power_constraint_db is not None:
+            limits.append(f"Power Constraint: {ap.power_constraint_db} dB")
+        if ap.tpe_summary:
+            limits.append(f"TPE: {esc(ap.tpe_summary)}")
+        if ap.country_power:
+            limits.append(f"Country ({esc(ap.country)}{', ' + esc(ap.country_env) if ap.country_env else ''}): {esc(ap.country_power)}")
+        v["tx_limits"].setText("<br>".join(limits) or dim("Not advertised"))
+
+        if ap.basic_rates or ap.has_11b_rates is not None:
+            txt = (f"{ap.basic_rates} Mbps" if ap.basic_rates else dim("none marked"))
+            if ap.has_11b_rates:
+                txt += "<br>" + dim("802.11b (DSSS/CCK) rates enabled — legacy clients slow the whole cell")
+            v["basic_rates"].setText(txt)
+        else:
+            v["basic_rates"].setText(dim("Unknown"))
+
+        if ap.is_lingering:
+            v["last_seen"].setText(dim("Not in the latest scan (lingering)"))
+        elif ap.last_seen_ms is not None:
+            v["last_seen"].setText(f"{ap.last_seen_ms / 1000:.1f} s ago (iw scan cache)")
+        else:
+            v["last_seen"].setText(dim("Unknown"))
+
+        v["rsnx"].setText(esc(ap.rsnx_caps) or dim("Not advertised"))
+        v["group_mgmt"].setText(esc(ap.group_mgmt_cipher) or dim("Not advertised"))
+        if ap.owe_transition_bssid:
+            v["owe_pair"].setText(
+                f"{ap.owe_transition_bssid}"
+                + (f"  {dim('SSID ' + esc(ap.owe_transition_ssid))}" if ap.owe_transition_ssid else "")
+            )
+        else:
+            v["owe_pair"].setText(dim("None"))
+        if ap.mobility_domain:
+            n = mobility_domain_members(ap, self._aps)
+            v["mobility_domain"].setText(
+                f"MDID {ap.mobility_domain}"
+                + (" · FT over DS" if ap.ft_over_ds else " · FT over the air")
+                + f"  {dim(f'({n} BSSID(s) of this SSID share it)')}"
+            )
+        else:
+            v["mobility_domain"].setText(dim("Not advertised (no 802.11r)"))
 
     def _show_connection(self):
         def dim(text):
@@ -1226,6 +1276,9 @@ class MainWindowLogicMixin:
                 "noise_floor",
                 "inactive",
                 "connected_time",
+                "snr",
+                "signal_chains",
+                "roam",
             ):
                 v[key].setText(dim("—"))
             return
@@ -1238,14 +1291,14 @@ class MainWindowLogicMixin:
             "CONNECTED AP</span>"
         )
         self._conn_ssid.setText(
-            f'<span style="font-size:20px;font-weight:700;color:{color}">{ap.display_ssid}</span>{connected_badge}'
+            f'<span style="font-size:20px;font-weight:700;color:{color}">{html.escape(ap.display_ssid)}</span>{connected_badge}'
         )
 
         v["status"].setText("Connected")
-        v["ssid"].setText(ap.display_ssid)
+        v["ssid"].setText(html.escape(ap.display_ssid))
         v["bssid"].setText(ap.bssid)
         manuf_text = format_manufacturer_display(ap.manufacturer)
-        v["manufacturer"].setText(manuf_text or dim("Unknown"))
+        v["manufacturer"].setText(html.escape(manuf_text) or dim("Unknown"))
         v["band"].setText(ap.band)
         v["channel"].setText(str(ap.channel) if ap.channel else dim("Unknown"))
         v["security"].setText(ap.security_short or dim("Unknown"))
@@ -1262,6 +1315,24 @@ class MainWindowLogicMixin:
         v["rsn_caps"].setText(ap.rsn_capabilities or dim("Not advertised"))
         v["vendor_ies"].setText(ap.vendor_ie_ouis or dim("Not advertised"))
         v["signal"].setText(f"{ap.dbm} dBm  ({ap.signal}%)")
+        if ap.conn_snr_db is not None:
+            v["snr"].setText(f"{ap.conn_snr_db:.0f} dB")
+        else:
+            v["snr"].setText(dim("Needs noise floor (driver does not report survey data)"))
+        v["signal_chains"].setText(
+            f"{ap.conn_signal_chains} dBm" if ap.conn_signal_chains else dim("Not reported")
+        )
+        cands = roam_candidates(ap, self._aps)
+        if cands:
+            v["roam"].setText(
+                "<br>".join(
+                    f"{c.bssid} · {c.band} ch {c.channel} · {c.dbm} dBm "
+                    + dim(f"({c.dbm - ap.dbm:+d} dB)")
+                    for c in cands[:6]
+                )
+            )
+        else:
+            v["roam"].setText(dim("No other BSSID of this SSID visible"))
 
         v["iface"].setText(ap.conn_iface or dim("Unknown"))
         v["rx_phy"].setText(ap.conn_rx_phy or dim("Not reported"))
@@ -1364,36 +1435,122 @@ class MainWindowLogicMixin:
     def _prompt_oui_download(self):
         dlg = OuiDownloadDialog(self, first_run=True)
         dlg.exec()
-        # After a successful download the OUI DB is already reloaded globally;
-        # trigger a fresh scan so new AP objects pick up the better names.
-        if OUI_JSON_PATH.exists():
-            self._scanner.stop()
-            self._scanner = WiFiScanner(
-                interval_sec=REFRESH_INTERVALS[self._interval_combo.currentIndex()],
-                linger_secs=float(self._linger_spin.value()),
-            )
-            self._scanner.data_ready.connect(self._on_data)
-            self._scanner.scan_error.connect(self._on_error)
-            self._scanner.start()
+        if dlg.downloaded:
+            self._after_oui_update()
 
     def _on_update_oui(self):
         dlg = OuiDownloadDialog(self, first_run=False)
         dlg.exec()
-        if OUI_JSON_PATH.exists():
-            # Restart scanner so APs get fresh manufacturer names
-            self._scanner.stop()
-            self._scanner = WiFiScanner(
-                interval_sec=REFRESH_INTERVALS[self._interval_combo.currentIndex()],
-                linger_secs=float(self._linger_spin.value()),
-            )
-            self._scanner.data_ready.connect(self._on_data)
-            self._scanner.scan_error.connect(self._on_error)
-            self._scanner.start()
+        if dlg.downloaded:
+            self._after_oui_update()
             self.statusBar().showMessage("OUI database updated — re-scanning…")
+
+    def _after_oui_update(self) -> None:
+        """New AccessPoints resolve vendors from the reloaded DB on the next
+        scan; lingering copies (and cached manufacturer fields) still carry
+        the old names, so drop them."""
+        for cache in self._iw_cache.values():
+            cache.pop("manufacturer", None)
+            cache.pop("manufacturer_source", None)
+        if self._scanner is not None:
+            self._scanner.request_cache_clear()
 
     def _status(self, msg: str):
         self.statusBar().showMessage(msg)
 
     def closeEvent(self, event):
-        self._scanner.stop()
+        # A running capture has taken the interface out of NetworkManager's
+        # control (or stopped NM); restore it before the app goes away.
+        busy = [
+            w
+            for w in (getattr(self, "_monitor_win", None), getattr(self, "_managed_win", None))
+            if w is not None and w.is_busy()
+        ]
+        if busy:
+            ans = QMessageBox.question(
+                self,
+                "Capture in progress",
+                "A packet capture is still running.\n\n"
+                "Stop it and restore the Wi-Fi interface before quitting?\n"
+                "(You may be asked for your password.)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            )
+            if ans != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+            self.statusBar().showMessage("Stopping capture and restoring the interface…")
+            QApplication.processEvents()
+            for w in busy:
+                w.shutdown_blocking()
+
+        self._save_settings()
+        self._stop_scanner(wait_ms=None)
+        for sc in list(self._retired_scanners):
+            sc.stop(wait_ms=None)
         super().closeEvent(event)
+
+    # ── Settings persistence (QSettings: ~/.config/wavescope/WaveScope.conf) ──
+
+    def _restore_settings(self) -> None:
+        st = self._settings
+
+        def _int(key: str, default: int) -> int:
+            try:
+                return int(st.value(key, default))
+            except (TypeError, ValueError):
+                return default
+
+        geo = st.value("window/geometry")
+        if isinstance(geo, QByteArray) and not geo.isEmpty():
+            self.restoreGeometry(geo)
+        for key, splitter in (("window/h_splitter", self._h_splitter), ("window/v_splitter", self._v_splitter)):
+            state = st.value(key)
+            if isinstance(state, QByteArray) and not state.isEmpty():
+                splitter.restoreState(state)
+        self._sidebar_last_width = _int("window/sidebar_width", self._sidebar_last_width)
+        if st.value("window/sidebar_visible", "true") in (False, "false"):
+            self._btn_sidebar.setChecked(False)
+
+        idx = _int("scan/interval_index", self._interval_combo.currentIndex())
+        if 0 <= idx < self._interval_combo.count():
+            self._interval_combo.setCurrentIndex(idx)
+        self._linger_spin.setValue(_int("scan/linger_s", self._linger_spin.value()))
+        band = st.value("filter/band", "All")
+        if isinstance(band, str) and self._band_combo.findText(band) >= 0:
+            self._band_combo.setCurrentText(band)
+
+        theme = _int("ui/theme_index", 0)
+        if 0 <= theme < self._theme_combo.count():
+            self._theme_combo.setCurrentIndex(theme)  # emits → _on_theme_change
+        tab = _int("ui/tab_index", 0)
+        if 0 <= tab < self._tabs.count():
+            self._tabs.setCurrentIndex(tab)
+
+        widths = st.value("table/user_column_widths", {})
+        if isinstance(widths, dict):
+            for col_s, w in widths.items():
+                try:
+                    col, w = int(col_s), int(w)
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= col < len(TABLE_HEADERS) and w > 0:
+                    self._table.setColumnWidth(col, w)
+                    self._user_sized_cols.add(col)
+
+    def _save_settings(self) -> None:
+        st = self._settings
+        st.setValue("window/geometry", self.saveGeometry())
+        st.setValue("window/h_splitter", self._h_splitter.saveState())
+        st.setValue("window/v_splitter", self._v_splitter.saveState())
+        st.setValue("window/sidebar_width", int(getattr(self, "_sidebar_last_width", 180)))
+        st.setValue("window/sidebar_visible", self._btn_sidebar.isChecked())
+        st.setValue("scan/interval_index", self._interval_combo.currentIndex())
+        st.setValue("scan/linger_s", self._linger_spin.value())
+        st.setValue("filter/band", self._band_combo.currentText())
+        st.setValue("ui/theme_index", self._theme_combo.currentIndex())
+        st.setValue("ui/tab_index", self._tabs.currentIndex())
+        st.setValue(
+            "table/user_column_widths",
+            {str(c): self._table.columnWidth(c) for c in sorted(self._user_sized_cols)},
+        )
+        st.sync()

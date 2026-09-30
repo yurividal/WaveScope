@@ -2,10 +2,11 @@
 __pycache__/
 *.py[cod]
 *.deb
+*.rpm
 *.AppImage
 appimagetool-*.AppImage
 _deb_build/
-_rpm_build/
+_rpm_build*/
 _appimage_build/
 squashfs-root/
 *.egg-info/
@@ -14,4 +15,6 @@ build/
 .DS_Store
 Vendors/
 .vscode/
+.ruff_cache/
 supporting-documentation/
+.claude/settings.local.json

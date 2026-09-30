@@ -1,0 +1,19 @@
+# constraints.txt — exact, known-good pins for the pip-installed Python deps.
+#
+# Used with `pip install -c constraints.txt ...` by:
+#   - install.sh                      (source install, .venv)
+#   - scripts/setup_venv.sh           (.deb postinst / .rpm %post, /opt venv)
+#   - scripts/build_appimage.sh       (bundled AppImage venv)
+#
+# requirements.txt keeps the loose lower bounds; this file decides what is
+# actually installed.  Supported interpreters: CPython 3.10 - 3.14.
+# Bump these deliberately and re-test all packages when doing so.
+
+# pyqtgraph 0.14.0: pure-python wheel, Python >=3.10, Qt 6.2+ (distro PyQt6 OK)
+pyqtgraph==0.14.0
+colorama==0.4.6
+
+# numpy 2.3+ dropped Python 3.10, so 3.10 (Ubuntu 22.04, AppImage build host)
+# stays on the 2.2 series.  2.4.6 ships cp311-cp314 wheels.
+numpy==2.2.6; python_version < "3.11"
+numpy==2.4.6; python_version >= "3.11"

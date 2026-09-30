@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.9.7 — 2026-09-30
+
+Full correctness pass over the 802.11 parsing, plus Wi-Fi 6E/7 and RF-analysis features. iw and nmcli formats were checked against their upstream sources (iw `scan.c`/`util.c`/`station.c`/`link.c`, NetworkManager `nmcli/devices.c`, hostap `ieee802_11_defs.h`, Wireshark's 802.11 dissector).
+
+### Fixes — wrong or misleading wireless data
+- **RSN Capabilities decoded from the wrong IE** — the parser matched the first bare `Capabilities:` line (RM Enabled or HT capabilities) instead of the RSN IE, so every AP showed made-up RSN capabilities.
+- **PMF bits swapped** — RSN Capabilities bit 6 is MFPR (required) and bit 7 is MFPC (capable); they were reversed. OCV capable (bit 14) is now decoded too.
+- **Bonded-channel center wrong / APs missing from the graph** — iw's VHT "center freq segment" is a channel index, not MHz. A 2.4 GHz HT40 AP with a vendor VHT IE got a 3 MHz center and vanished from the spectrum graph. Centers now come from the HT/VHT/HE-6 GHz/EHT Operation elements with the standard CCFS0/CCFS1 rules, including 160 MHz signalled through CCFS1 and 80+80.
+- **Security label wrong without iw data** — WPA3-SAE, WPA2/WPA3 transition and Enterprise networks fell back to "WPA2 (PSK)", and plain WPA2 could show as "WPA/WPA2". Labels now use iw's AKM suites, or nmcli's real `RSN-FLAGS`/`SECURITY` tokens, and distinguish WPA3-Enterprise, WPA2/WPA3-Enterprise and 192-bit (Suite B).
+- **6 GHz bonding incomplete** — added the 40/80/160 MHz blocks above ch 181/167 and both 320 MHz channelizations (320-1 and 320-2, selected by the EHT Operation element).
+- **Channel ↔ frequency collisions** — `chan_to_freq(1)` returned 5955 MHz (6 GHz) instead of 2412; channel math is now band-aware and handles 6 GHz ch 2 (5935 MHz).
+- **dBm estimate up to 10 dB off** — when iw has no exact RSSI, dBm is now the exact inverse of NetworkManager's -100…-40 dBm quality mapping.
+- **DTIM never shown** — the TIM IE format was mis-parsed; DTIM now also comes from `station dump` for the connected AP.
+- **Connected link frequency never parsed** — iw 6.x prints `freq: 5745.0`.
+- **"WiFi 5" on 2.4 GHz** — vendor VHT IEs on 2.4 GHz (Broadcom TurboQAM) are now labelled as proprietary 256-QAM on Wi-Fi 4/6.
+- **Channel busy % was a lifetime average** — now computed from survey counter deltas between polls.
+- **Vendor IEs ignored** — plain `iw scan dump` omits vendor-specific IEs, so the Vendor IEs field was always empty and the v1.9.5 Meraki detection never fired. A single `scan dump -u` pass now provides everything (and halves the iw calls).
+- **Cisco AP name** — read from the fixed 16-byte field in IE 133, so a client count ≥ 32 is no longer appended to the name.
+- **Max PHY rate** — computed per MCS/NSS/width from subcarrier counts, including EHT MCS 12/13 (4096-QAM).
+- **Per-chain station signal** — `signal avg` with per-antenna values in brackets is now parsed.
+- **Misc** — HE/EHT GI shown in µs, TWT only flagged for TWT responders, BSS color "disabled" honoured, negative TPC values accepted, nmcli SSIDs ending in a backslash no longer shift columns, localized nmcli output no longer breaks parsing, duplicate rows with two Wi-Fi adapters merged, iw data collected from every managed interface.
+- **Vendor guess transparency** — the "OUI suffix" heuristic for randomized/LAA MACs is now labelled as a guess instead of "OUI database".
+
+### Fixes — application
+- **Root shell injection in packet capture** — capture paths and interface names were pasted unquoted into scripts run as root. Scripts are now fixed text taking validated positional arguments, stored in a private 0700 temp directory.
+- **Networking left down after capture** — the monitor-mode script now restores the interface and NetworkManager from an EXIT trap, uses `nmcli device set … managed no` instead of stopping NetworkManager by default, and quitting WaveScope during a capture stops it and restores the interface first.
+- **6 GHz monitor capture on the wrong channel** — tuning now uses `iw set freq` (with a width selector) for every band; setup failures are reported instead of silently capturing elsewhere.
+- **Crash on pause/resume or exit** — the scanner thread now stops within ~200 ms (interruptible sleep and subprocesses) and is never dropped while running.
+- **Table jumping / lost column widths** — scans are applied as a row diff, so selection, scroll position and user-set column widths survive refreshes.
+- **Filters not reaching the channel graph** until the next scan; the graph now updates immediately.
+- **Unbounded memory on long surveys** — signal history, legend and per-BSSID caches are now pruned.
+- **Stale values** — lingering (vanished) APs no longer keep "connected" telemetry; the dBm column no longer freezes while iw misses a BSS; a restored frequency now also restores the band.
+- **OUI download dialog** could be closed mid-download and crash; database reload now happens on the GUI thread.
+- **Context menu "View details"** could open the wrong AP after a re-sort.
+- **Refresh interval** combo and scanner disagreed at startup; NetworkManager rescans now follow its ~10 s rate limit.
+- **Beacon-supplied strings** (SSID, AP name, WPS data) are HTML-escaped in the details panels.
+- **Atomic writes** for the OUI database and Known SSIDs files.
+
+### New Features
+- **Settings saved between sessions** — theme, refresh interval, linger time, band filter, column widths, splitters and window geometry.
+- **Channel congestion score** — per 20 MHz channel from overlapping BSS count, signal and BSS Load utilization (hover the channel graph or see Details).
+- **BSS color collision alerts** — flagged in the graph (⚠), the status bar and Details.
+- **Wi-Fi 6E/7 detail** — PSC markers on the 6 GHz panel, 6 GHz AP power type (LPI/SP/VLP), EHT punctured subchannels drawn as gaps, MLD MAC with multi-link AP grouping, co-located APs from the Reduced Neighbor Report.
+- **Security detail** — RSNX (SAE H2E, SAE-PK), RSN Element Override AKMs, group management cipher, OWE transition pairs.
+- **Roaming detail** — 802.11r Mobility Domain ID and FT-over-DS, roam candidates for the connected SSID with signal delta.
+- **Link detail** — SNR, per-antenna-chain RSSI.
+- **More AP detail** — basic rates and 802.11b-rates warning, Country IE per-channel power limits, Power Constraint, Transmit Power Envelope, iw "last seen" age, PSC/DFS notes, bonded block and block center.
+- **AP grouping** — locally-administered BSSID variants now group with their base MAC.
+
+### Packaging & repo
+- **.deb could not start the app** — pyqtgraph imports `PyQt6.uic`, which on Debian/Ubuntu lives in `pyqt6-dev-tools`; now a dependency. The .deb requires Debian 12+ / Ubuntu 24.04+ (documented).
+- **Fedora RPM could not install** — `python3-qt6` does not exist on Fedora 44; now `python3-pyqt6`.
+- Install-time venv setup is non-fatal with a recovery command (`sudo /opt/wavescope/setup-venv.sh`) and uses pinned `constraints.txt`.
+- RPMs own `/opt/wavescope` and ship `%license`; the .deb ships a copyright file; AppStream metainfo added to all packages; desktop category fixed.
+- AppImage: metainfo, desktop file and icon under `usr/share`; Docker build wrapper `scripts/build_appimage_docker.sh`.
+- `install.sh` supports apt, dnf and zypper and checks for `nmcli`/`iw`/`tcpdump`/`pkexec`.
+- Release CI: manual re-run for an existing tag (`workflow_dispatch`), pinned `fedora:44`, lint job (ruff + compileall).
+- README updated (install commands matching real asset names, openSUSE section, dependencies, features); CONTRIBUTING.md, issue template and `pyproject.toml` added.
+
 ## v1.9.6 — 2026-09-30
 
 ### Fixes

@@ -479,45 +479,58 @@ def ap_group_display_label(group_key: str, manufacturer: str) -> str:
     return f"{first_word}:{parts[3]}:{parts[4]}:{first_nibble}#"
 
 
-def get_manufacturer(bssid: str) -> str:
+def get_manufacturer_with_source(bssid: str) -> Tuple[str, str]:
+    """Resolve (vendor, source) for a BSSID.
+
+    Sources, in decreasing confidence:
+      "OUI database"                 — direct OUI match
+      "OUI database (U/L bit cleared)" — locally-administered BSSID whose
+                                       globally-administered form matches
+      "OUI suffix guess (LAA)"       — heuristic: the last two OUI octets map
+                                       to exactly one vendor; can be wrong for
+                                       randomized MACs (e.g. phone hotspots)
+    """
     global _oui_full, _oui_loaded, _oui_suffix_unique_vendor
     if not _oui_loaded:
         _oui_full = _load_oui_with_precedence()
         _oui_loaded = True
     if not bssid:
-        return ""
+        return "", "Unknown"
     mac = bssid.upper().replace("-", ":")
     prefix = mac[:8]
-    if _oui_full and prefix in _oui_full:
-        return _oui_full[prefix]
+    db = _oui_full or {}
+    if prefix in db:
+        return db[prefix], "OUI database"
 
     # Some AP radios use locally administered BSSIDs (U/L bit set), which
     # often map to an underlying globally administered vendor OUI with that
     # bit cleared. If direct lookup misses, try clearing the U/L bit.
     try:
         first_octet = int(prefix[:2], 16)
-        if first_octet & 0x02:
-            ga_octet = first_octet & 0xFD
-            ga_prefix = f"{ga_octet:02X}{prefix[2:]}"
-            if _oui_full and ga_prefix in _oui_full:
-                return _oui_full[ga_prefix]
+    except ValueError:
+        return "", "Unknown"
+    if first_octet & 0x02:
+        ga_prefix = f"{first_octet & 0xFD:02X}{prefix[2:]}"
+        if ga_prefix in db:
+            return db[ga_prefix], "OUI database (U/L bit cleared)"
 
-            # Conservative fallback for locally-administered addresses where
-            # only the first OUI octet was transformed by firmware/tooling.
-            # We only accept BB:CC suffixes that map to exactly one
-            # globally-administered OUI prefix in the current DB.
-            if not (first_octet & 0x01):
-                if _oui_suffix_unique_vendor is None:
-                    _oui_suffix_unique_vendor = _build_unique_oui_suffix_vendor_index(
-                        _oui_full or {}
-                    )
-                suffix = prefix[3:8]
-                vendor = (_oui_suffix_unique_vendor or {}).get(suffix, "")
-                if vendor:
-                    return vendor
-    except Exception:
-        pass
-    return ""
+        # Conservative fallback for locally-administered addresses where
+        # only the first OUI octet was transformed by firmware/tooling.
+        # We only accept BB:CC suffixes that map to exactly one
+        # globally-administered OUI prefix in the current DB.
+        if not (first_octet & 0x01):
+            index = _oui_suffix_unique_vendor
+            if index is None:
+                index = _build_unique_oui_suffix_vendor_index(db)
+                _oui_suffix_unique_vendor = index
+            vendor = index.get(prefix[3:8], "")
+            if vendor:
+                return vendor, "OUI suffix guess (LAA)"
+    return "", "Unknown"
+
+
+def get_manufacturer(bssid: str) -> str:
+    return get_manufacturer_with_source(bssid)[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -529,7 +542,8 @@ class OuiDownloadThread(QThread):
     """Downloads and parses the IEEE OUI text file in a background thread."""
 
     progress = pyqtSignal(str)  # status message
-    finished = pyqtSignal(bool, str)  # success, message
+    # Named "done" so it does not shadow QThread.finished.
+    done = pyqtSignal(bool, str)  # success, message
 
     def run(self):
         try:
@@ -546,20 +560,20 @@ class OuiDownloadThread(QThread):
             db = {m[0].replace("-", ":"): m[1].strip() for m in matches}
 
             if not db:
-                self.finished.emit(False, "No OUI entries found in downloaded data.")
+                self.done.emit(False, "No OUI entries found in downloaded data.")
                 return
 
             self.progress.emit(f"Saving {len(db):,} entries…")
-            OUI_DATA_DIR.mkdir(parents=True, exist_ok=True)
-            OUI_JSON_PATH.write_text(
+            atomic_write_text(
+                OUI_JSON_PATH,
                 json.dumps(db, ensure_ascii=False, separators=(",", ":")),
-                encoding="utf-8",
             )
-            reload_oui_db()
-            self.finished.emit(True, f"Downloaded {len(db):,} manufacturer entries.")
+            # reload_oui_db() runs in the dialog's slot on the GUI thread —
+            # it clears the QIcon cache, which must not happen off-thread.
+            self.done.emit(True, f"Downloaded {len(db):,} manufacturer entries.")
 
         except Exception as exc:
-            self.finished.emit(False, str(exc))
+            self.done.emit(False, str(exc))
 
 
 class OuiDownloadDialog(QDialog):
@@ -569,6 +583,7 @@ class OuiDownloadDialog(QDialog):
         super().__init__(parent)
         self._first_run = first_run
         self._thread: Optional[OuiDownloadThread] = None
+        self.downloaded = False  # True once a download succeeded
         self.setWindowTitle("Manufacturer Database")
         self.setMinimumWidth(460)
         self.setModal(True)
@@ -622,12 +637,30 @@ class OuiDownloadDialog(QDialog):
 
         self._thread = OuiDownloadThread(self)
         self._thread.progress.connect(self._status.setText)
-        self._thread.finished.connect(self._on_finished)
+        self._thread.done.connect(self._on_finished)
         self._thread.start()
+
+    def _busy(self) -> bool:
+        return self._thread is not None and self._thread.isRunning()
+
+    def reject(self):
+        # Esc / window-close while downloading would destroy the dialog (and
+        # its child QThread) mid-run; ignore until the download finishes.
+        if self._busy():
+            return
+        super().reject()
+
+    def closeEvent(self, event):
+        if self._busy():
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     def _on_finished(self, ok: bool, msg: str):
         self._progress.hide()
         if ok:
+            reload_oui_db()
+            self.downloaded = True
             self._status.setText(f"✓  {msg}")
             self._status.setStyleSheet(f"color:{VENDOR_SUCCESS}; font-size:9pt;")
             self._btn_skip.setText("Close")

@@ -39,10 +39,9 @@ class KnownSSIDStore:
 
     def _save(self) -> None:
         try:
-            KNOWN_SSIDS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            KNOWN_SSIDS_PATH.write_text(
+            atomic_write_text(
+                KNOWN_SSIDS_PATH,
                 json.dumps(sorted(self._ssids), ensure_ascii=False, indent=2),
-                encoding="utf-8",
             )
         except Exception:
             pass

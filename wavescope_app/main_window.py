@@ -22,9 +22,14 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         # Cache for fields that must never regress to 0 / "" / None once known
         self._sticky_cache: Dict[str, dict] = {}  # bssid.lower() → {field: last_good}
         self._conn_counter_prev: Dict[str, Dict[str, int]] = {}
-        self._scanner = WiFiScanner(interval_sec=2, linger_secs=60.0)
-        self._scanner.data_ready.connect(self._on_data)
-        self._scanner.scan_error.connect(self._on_error)
+        # Scanner threads that were asked to stop but have not finished yet;
+        # kept referenced so Qt never destroys a running QThread.
+        self._retired_scanners: List[WiFiScanner] = []
+        self._scanner: Optional[WiFiScanner] = None
+        # Latest cross-AP analysis (congestion / BSS color / roaming)
+        self._channel_stats: Dict[Tuple[str, int], ChannelStats] = {}
+        self._color_collisions: Dict[str, List[AccessPoint]] = {}
+        self._settings = QSettings("wavescope", "WaveScope")
 
         self._known_store = KnownSSIDStore()
 
@@ -40,10 +45,25 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self._apply_details_theme(True)
         self._apply_tb_theme(True)
         self._ap_sidebar.apply_theme(True)
-        # Whenever any filter changes (text, band, column include/exclude) the
-        # proxy emits layoutChanged — refresh the graph to show only visible APs.
-        self._proxy.layoutChanged.connect(self._on_filter_changed)
-        self._scanner.start()
+        # Filter changes reach the proxy as rows inserted/removed (Qt 6
+        # invalidateFilter) or layoutChanged (re-sort); coalesce them into one
+        # graph refresh per event-loop pass.
+        self._filter_refresh_timer = QTimer(self)
+        self._filter_refresh_timer.setSingleShot(True)
+        self._filter_refresh_timer.setInterval(0)
+        self._filter_refresh_timer.timeout.connect(self._on_filter_changed)
+        for sig in (
+            self._proxy.layoutChanged,
+            self._proxy.rowsInserted,
+            self._proxy.rowsRemoved,
+            self._proxy.modelReset,
+        ):
+            sig.connect(lambda *_: self._filter_refresh_timer.start())
+        # Re-fit column widths only when the set of rows changes.
+        self._model.rows_changed.connect(self._auto_size_table_columns)
+
+        self._restore_settings()
+        self._start_scanner()
         self._status("Scanning…")
         # First-run OUI prompt (only if IEEE JSON not yet downloaded)
         if not OUI_JSON_PATH.exists():

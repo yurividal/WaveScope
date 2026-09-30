@@ -48,10 +48,15 @@ def _printable(raw: bytes) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_cisco_ap_name(text: str, d: dict) -> None:
-    """Cisco AP system name from IE 133 (element ID 0x85).
+    """Cisco AP system name from IE 133 (CCX1 CKIP + Device Name).
 
-    Format: <8-byte header> 0x40 <ASCII name> 0x00 ...
-    iw -u output: Unknown IE (133): xx xx xx xx xx xx xx xx 40 <hex name> ...
+    Layout per Wireshark's dissector (packet-ieee80211.c,
+    ieee80211_tag_cisco_ccx1_ckip): 10 unknown octets, a 16-octet
+    NUL-padded ASCII name, 1 octet client count, 3 unknown octets.
+    iw -u output: Unknown IE (133): <hex bytes>
+
+    Reading exactly the 16-octet name field keeps the client-count byte
+    (printable once ≥ 32 clients) from being appended to the name.
     """
     if d.get("ap_name"):
         return
@@ -59,11 +64,20 @@ def _parse_cisco_ap_name(text: str, d: dict) -> None:
     if raw is None:
         return
     try:
-        idx = raw.find(0x40)
-        if idx != -1 and idx + 1 < len(raw):
-            name = _printable(raw[idx + 1:]).rstrip(" ,\x00")
-            if name:
-                d["ap_name"] = name
+        if len(raw) >= 26:
+            name = _printable(raw[10:26].split(b"\x00", 1)[0]).strip()
+            if len(raw) >= 27:
+                d["cisco_client_count"] = int(raw[26])
+        else:
+            # Short/non-standard element: legacy heuristic (name after 0x40).
+            idx = raw.find(0x40)
+            name = (
+                _printable(raw[idx + 1:].split(b"\x00", 1)[0]).strip()
+                if idx != -1
+                else ""
+            )
+        if name:
+            d["ap_name"] = name
     except Exception:
         pass
 

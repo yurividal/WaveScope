@@ -8,3 +8,4 @@ from .core_vendor import *
 from .core_models import *
 from .core_scanner import *
 from .core_table import *
+from .analysis import *

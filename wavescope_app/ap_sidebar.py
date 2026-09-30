@@ -142,9 +142,9 @@ class APGroupSidebar(QWidget):
         # Compute groups: group_key → (manufacturer, set-of-bssids)
         raw: Dict[str, Tuple[str, set]] = {}
         for ap in aps:
-            key = ap_group_key(ap.bssid)
-            if key not in raw:
-                raw[key] = (ap.manufacturer, set())
+            key = ap_group_key_for(ap)  # MLD MAC when advertised (Wi-Fi 7)
+            if key not in raw or (not raw[key][0] and ap.manufacturer):
+                raw[key] = (ap.manufacturer, raw.get(key, ("", set()))[1])
             raw[key][1].add(ap.bssid)
 
         # Build (label, count) per group

@@ -13,7 +13,7 @@ scan parsers/enrichment, scanner worker thread, and table/proxy models.
 import sys
 import os
 import re
-import math
+import html
 import time
 import json
 import stat
@@ -24,7 +24,7 @@ import shutil
 from pathlib import Path
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from typing import TYPE_CHECKING, Optional, List, Dict, Tuple
 
 import numpy as np
 
@@ -49,8 +49,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QTabWidget,
     QCheckBox,
-    QButtonGroup,
-    QToolButton,
     QMenu,
     QScrollArea,
     QDialog,
@@ -76,12 +74,12 @@ from PyQt6.QtCore import (
     QSortFilterProxyModel,
     QAbstractTableModel,
     QModelIndex,
-    QVariant,
     QPointF,
     QRect,
     QRectF,
     QSize,
-    QPersistentModelIndex,
+    QSettings,
+    QByteArray,
 )
 from PyQt6.QtGui import (
     QColor,
@@ -93,13 +91,15 @@ from PyQt6.QtGui import (
     QPixmap,
     QPainter,
     QPen,
-    QLinearGradient,
     QFontMetrics,
     QAction,
     QCursor,
 )
 
 import pyqtgraph as pg
+
+if TYPE_CHECKING:  # annotation-only; importing at runtime would be circular
+    from .core_models import AccessPoint
 from pyqtgraph import PlotWidget, mkPen, mkBrush
 from .theme import (
     SSID_COLORS,
@@ -234,7 +234,7 @@ from .theme import (
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "1.9.6"
+VERSION = "1.9.7"
 APP_NAME = "WaveScope"
 
 
@@ -327,6 +327,28 @@ def warn_missing_tools_and_confirm(missing: List[Tuple[str, str]]) -> bool:
     return box.clickedButton() is proceed_btn
 
 
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write *text* to *path* atomically (temp file + rename).
+
+    A crash mid-write leaves the previous file intact instead of a truncated
+    JSON document that would later be silently ignored.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 HISTORY_SECONDS = 120  # seconds of signal history to keep
 REFRESH_INTERVALS = [1, 2, 5, 10]  # seconds
 
@@ -383,11 +405,70 @@ CH5 = {
 # Band covers 5925–7125 MHz (UNII-5/6/7/8).  59 primary channels total.
 CH6 = {ch: 5950 + ch * 5 for ch in range(1, 234, 4)}  # ch 1..233, step 4
 
-ALL_CHANNELS = {**CH24, **CH5, **CH6}
+# 6 GHz 20 MHz channel 2 (5935 MHz) sits below the regular 5955 MHz raster
+# (IEEE 802.11ax-2021 Annex E, operating class 136).  It never bonds.
+CH6_SPECIAL = {2: 5935}
+
+# 6 GHz Preferred Scanning Channels (PSC): every 4th 20 MHz channel starting
+# at ch 5 (5, 21, 37, … 229).  6 GHz-only APs are expected to sit on a PSC so
+# that clients can find them without scanning all 59 channels.
+PSC_6GHZ_CHANNELS = frozenset(range(5, 230, 16))
+
+# 5 GHz channels that require DFS / radar detection (U-NII-2A and U-NII-2C).
+# The exact set is regulatory-domain specific (e.g. ch 144 is not permitted
+# in ETSI); this is the common FCC/ETSI superset used for display only.
+DFS_5GHZ_CHANNELS = frozenset(list(range(52, 65, 4)) + list(range(100, 145, 4)))
+
+BAND_24 = "2.4 GHz"
+BAND_5 = "5 GHz"
+BAND_6 = "6 GHz"
+
+_BAND_CHANNELS: Dict[str, Dict[int, int]] = {
+    BAND_24: CH24,
+    BAND_5: CH5,
+    BAND_6: {**CH6_SPECIAL, **CH6},
+}
+
+# Legacy band-less lookup table.  Channel numbers are ambiguous across bands
+# (ch 1 exists in 2.4 and 6 GHz, ch 149 in 5 and 6 GHz), so the precedence is
+# 2.4 GHz → 5 GHz → 6 GHz.  Prefer chan_to_freq(chan, band) wherever possible.
+ALL_CHANNELS = {**CH6, **CH5, **CH24}
 
 
-def chan_to_freq(chan: int) -> int:
-    """Return best-guess center frequency for a channel number."""
+def chan_index_to_freq(index: int, band: str) -> int:
+    """Convert any channel *index* (primary or bonded-block center) to MHz.
+
+    Unlike chan_to_freq() this accepts block-center indices such as 42/155
+    (5 GHz VHT CCFS) or 7/15/31 (6 GHz HE/EHT CCFS), which are not primary
+    20 MHz channels.  Formulae from IEEE 802.11-2020 §E.1:
+      2.4 GHz: 2407 + 5·n  (n=14 is the Japan-only 2484 MHz special case)
+      5 GHz:   5000 + 5·n
+      6 GHz:   5950 + 5·n  (n=2 is the 5935 MHz special case)
+    Returns 0 for indices outside the band.
+    """
+    if index <= 0:
+        return 0
+    if band == BAND_24:
+        if index == 14:
+            return 2484
+        return 2407 + 5 * index if 1 <= index <= 13 else 0
+    if band == BAND_5:
+        return 5000 + 5 * index if 32 <= index <= 181 else 0
+    if band == BAND_6:
+        if index == 2:
+            return 5935
+        return 5950 + 5 * index if 1 <= index <= 233 else 0
+    return 0
+
+
+def chan_to_freq(chan: int, band: Optional[str] = None) -> int:
+    """Return the center frequency (MHz) of a primary 20 MHz channel.
+
+    Pass *band* whenever it is known: without it the lookup falls back to the
+    2.4 → 5 → 6 GHz precedence of ALL_CHANNELS, which is wrong for 6 GHz.
+    """
+    if band in _BAND_CHANNELS:
+        return _BAND_CHANNELS[band].get(chan, 0)
     return ALL_CHANNELS.get(chan, 0)
 
 
@@ -403,6 +484,8 @@ def freq_to_chan(freq_mhz: int) -> int:
         return 14
     if 5160 <= freq_mhz <= 5885:
         return (freq_mhz - 5000) // 5
+    if freq_mhz == 5935:
+        return 2
     if 5955 <= freq_mhz <= 7115:
         return (freq_mhz - 5950) // 5
     return 0
@@ -410,241 +493,196 @@ def freq_to_chan(freq_mhz: int) -> int:
 
 def freq_to_band(freq_mhz: int) -> str:
     if 2400 <= freq_mhz < 2500:
-        return "2.4 GHz"
+        return BAND_24
     if 5000 <= freq_mhz < 5900:
-        return "5 GHz"
+        return BAND_5
     if 5925 <= freq_mhz <= 7125:
-        return "6 GHz"
+        return BAND_6
     return "?"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5 GHz bonded-channel group tables
+# Bonded-channel block tables (5 GHz and 6 GHz)
 #
-# IEEE 802.11 defines fixed OFDM channel blocks for each bandwidth.
-# When an AP reports its *primary* 20 MHz channel at a wider BW, the actual
-# spectrum it occupies is the entire bonded block, not just ±BW/2 around the
-# primary channel center.
+# IEEE 802.11 defines fixed channel blocks for each bandwidth.  When an AP
+# reports its *primary* 20 MHz channel at a wider BW, the spectrum it occupies
+# is the whole bonded block, not ±BW/2 around the primary.
 #
-# Example: primary ch 116 @ 80 MHz → block is ch 116-128 → center at ch 122
-#          primary ch 100 @ 160 MHz → block is ch 100-128 → center at ch 114
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Each entry: ([primary channels in block], center_freq_MHz)
-_5GHZ_GROUPS_40: List[Tuple[List[int], int]] = [
-    ([36, 40], 5190),
-    ([44, 48], 5230),
-    ([52, 56], 5270),
-    ([60, 64], 5310),
-    ([100, 104], 5510),
-    ([108, 112], 5550),
-    ([116, 120], 5590),
-    ([124, 128], 5630),
-    ([132, 136], 5670),
-    ([140, 144], 5710),
-    ([149, 153], 5755),
-    ([157, 161], 5795),
-    ([165, 169], 5835),
-    ([173, 177], 5875),
-]
-
-_5GHZ_GROUPS_80: List[Tuple[List[int], int]] = [
-    ([36, 40, 44, 48], 5210),
-    ([52, 56, 60, 64], 5290),
-    ([100, 104, 108, 112], 5530),
-    ([116, 120, 124, 128], 5610),
-    ([132, 136, 140, 144], 5690),
-    ([149, 153, 157, 161], 5775),
-    ([165, 169, 173, 177], 5855),
-]
-
-_5GHZ_GROUPS_160: List[Tuple[List[int], int]] = [
-    ([36, 40, 44, 48, 52, 56, 60, 64], 5250),
-    ([100, 104, 108, 112, 116, 120, 124, 128], 5570),
-    ([149, 153, 157, 161, 165, 169, 173, 177], 5815),
-]
-
-# Fast lookup: (primary_chan, bw_mhz) → (center_freq_MHz, sorted_channels_list)
-_5GHZ_BONDED: Dict[Tuple[int, int], Tuple[int, List[int]]] = {}
-for _bw, _grps in [
-    (40, _5GHZ_GROUPS_40),
-    (80, _5GHZ_GROUPS_80),
-    (160, _5GHZ_GROUPS_160),
-]:
-    for _chans, _cf in _grps:
-        for _c in _chans:
-            _5GHZ_BONDED[(_c, _bw)] = (_cf, _chans)
-
-
-def get_5ghz_bonded_info(primary_chan: int, bw_mhz: int) -> Tuple[int, List[int]]:
-    """
-    Return (center_freq_MHz, [all_channels_in_block]) for a 5 GHz primary channel
-    at the given bandwidth.  Falls back to primary channel's own freq if the
-    combination is not in the standard block table.
-    """
-    key = (primary_chan, bw_mhz)
-    if key in _5GHZ_BONDED:
-        return _5GHZ_BONDED[key]
-    # Fallback: primary channel is both center and only member
-    return CH5.get(primary_chan, chan_to_freq(primary_chan)), [primary_chan]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 6 GHz bonded-channel group tables (derived from FCC/US standard-power plan)
+# Example: primary ch 116 @ 80 MHz → block ch 116-128 → center ch 122
+#          primary ch 100 @ 160 MHz → block ch 100-128 → center ch 114
 #
-# 20 MHz primaries: ch 1,5,9,…,233  (center_MHz = 5950 + ch*5)
-# 40 MHz centers:   ch 3,11,…,179   (pairs)
-# 80 MHz centers:   ch 7,23,…,167   (groups of 4)
-# 160 MHz centers:  ch 15,47,79,111,143 (groups of 8)
+# Each table entry is (center_channel_index, [primary channels in block]).
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _make_6ghz_group(center_chan: int, bw_mhz: int) -> Tuple[List[int], int]:
-    n_20mhz = bw_mhz // 20
-    start = center_chan - 2 * (n_20mhz - 1)
-    chans = [start + 4 * i for i in range(n_20mhz)]
-    center_freq = 5950 + center_chan * 5
-    return chans, center_freq
+def _block(center_idx: int, bw_mhz: int) -> Tuple[int, List[int]]:
+    """Primaries of a block of *bw_mhz* centered on channel index *center_idx*.
 
-
-_6GHZ_GROUPS_40: List[Tuple[List[int], int]] = [
-    _make_6ghz_group(c, 40) for c in range(3, 180, 8)
-]
-_6GHZ_GROUPS_80: List[Tuple[List[int], int]] = [
-    _make_6ghz_group(c, 80) for c in range(7, 168, 16)
-]
-_6GHZ_GROUPS_160: List[Tuple[List[int], int]] = [
-    _make_6ghz_group(c, 160) for c in range(15, 144, 32)
-]
-
-# Fast lookup: (primary_chan, bw_mhz) → (center_freq_MHz, sorted_channels_list)
-_6GHZ_BONDED: Dict[Tuple[int, int], Tuple[int, List[int]]] = {}
-for _bw, _grps in [
-    (40, _6GHZ_GROUPS_40),
-    (80, _6GHZ_GROUPS_80),
-    (160, _6GHZ_GROUPS_160),
-]:
-    for _chans, _cf in _grps:
-        for _c in _chans:
-            _6GHZ_BONDED[(_c, _bw)] = (_cf, _chans)
-
-
-def get_6ghz_bonded_info(primary_chan: int, bw_mhz: int) -> Tuple[int, List[int]]:
+    Primary channel indices are 4 apart (20 MHz); the outermost primaries sit
+    10 MHz (2 indices) inside the block edges.
     """
-    Return (center_freq_MHz, [all_channels_in_block]) for a 6 GHz primary channel
-    at the given bandwidth, based on the standard 6 GHz bonded block tables.
-    Falls back to primary channel's own freq if not in table.
-    """
-    key = (primary_chan, bw_mhz)
-    if key in _6GHZ_BONDED:
-        return _6GHZ_BONDED[key]
-    return CH6.get(primary_chan, chan_to_freq(primary_chan)), [primary_chan]
+    n_20 = bw_mhz // 20
+    first = center_idx - 2 * (n_20 - 1)
+    return center_idx, [first + 4 * i for i in range(n_20)]
 
 
-def _block_channel_range(
-    center_freq: int, bw_mhz: int, chan_dict: Dict[int, int]
-) -> Tuple[Optional[int], Optional[int]]:
-    """
-    Return (lo_chan, hi_chan) — the outermost primary channels that fall inside
-    a bonded block of `bw_mhz` MHz centered at `center_freq` MHz.
+# 5 GHz (IEEE 802.11-2020 Annex E, Table E-4 plus the U-NII-4 channels
+# 169-177 added by 802.11ax-2021 for FCC).
+_5GHZ_BLOCKS: Dict[int, List[Tuple[int, List[int]]]] = {
+    40: [_block(c, 40) for c in (38, 46, 54, 62, 102, 110, 118, 126, 134, 142,
+                                 151, 159, 167, 175)],
+    80: [_block(c, 80) for c in (42, 58, 106, 122, 138, 155, 171)],
+    160: [_block(c, 160) for c in (50, 114, 163)],
+}
 
-    Each 20 MHz primary channel has its center `bw/2 - 10` MHz from the block
-    edge, so the outermost centers are at center_freq ± (bw/2 - 10).
-    Works for all bands: 2.4 GHz (40 MHz), 5 GHz, 6 GHz (up to 320 MHz).
+# 6 GHz (IEEE 802.11ax-2021 / 802.11be-2024 Annex E, op classes 132-134, 137).
+#   40 MHz centers:  3, 11, … 227        (29 blocks, ch 1-229)
+#   80 MHz centers:  7, 23, … 215        (14 blocks, ch 1-221)
+#   160 MHz centers: 15, 47, … 207       (7 blocks,  ch 1-221)
+#   320 MHz centers: 31/95/159 ("320-1") and 63/127/191 ("320-2") overlap by
+#   design; the EHT Operation element's CCFS1 says which one is in use.
+_6GHZ_BLOCKS: Dict[int, List[Tuple[int, List[int]]]] = {
+    40: [_block(c, 40) for c in range(3, 228, 8)],
+    80: [_block(c, 80) for c in range(7, 216, 16)],
+    160: [_block(c, 160) for c in range(15, 208, 32)],
+    # 320-1 first so it wins when CCFS is unknown and both channelizations
+    # contain the primary; 320-2 covers primaries 193-221 that 320-1 cannot.
+    320: [_block(c, 320) for c in (31, 95, 159, 63, 127, 191)],
+}
+
+
+def _lookup_block(band: str, primary_chan: int, bw_mhz: int) -> Optional[Tuple[int, List[int]]]:
+    tables = _5GHZ_BLOCKS if band == BAND_5 else _6GHZ_BLOCKS if band == BAND_6 else {}
+    for center_idx, chans in tables.get(bw_mhz, []):
+        if primary_chan in chans:
+            return center_idx, chans
+    return None
+
+
+def bonded_block(
+    band: str,
+    primary_chan: int,
+    bw_mhz: int,
+    center_freq: Optional[int] = None,
+) -> Tuple[int, List[int]]:
+    """Resolve (center_MHz, [primary channels]) of the block an AP occupies.
+
+    Resolution order:
+      1. *center_freq* — the operating block center decoded from the beacon's
+         HT/VHT/HE/EHT Operation element (MHz).  Used only when the primary
+         channel actually lies inside that block, so a stale or malformed
+         center can never move the AP to the wrong part of the band.
+      2. The standard 5/6 GHz block table for (primary, width).
+      3. The primary channel alone (20 MHz, or 2.4 GHz 40 MHz with unknown
+         secondary-channel direction).
     """
-    half = bw_mhz // 2 - 10
-    lo = center_freq - half
-    hi = center_freq + half
-    in_range = [c for c, f in chan_dict.items() if lo <= f <= hi]
-    if not in_range:
-        return None, None
-    return min(in_range), max(in_range)
+    chan_dict = _BAND_CHANNELS.get(band, {})
+    primary_freq = chan_dict.get(primary_chan, 0)
+    if bw_mhz <= 20 or not primary_freq:
+        return primary_freq, [primary_chan] if primary_chan else []
+
+    half = bw_mhz / 2.0
+    if center_freq and abs(primary_freq - center_freq) < half:
+        # Primaries whose 20 MHz sub-channel lies wholly inside the block.
+        chans = sorted(
+            c for c, f in chan_dict.items() if abs(f - center_freq) <= half - 10
+        )
+        if primary_chan in chans:
+            return int(center_freq), chans
+
+    found = _lookup_block(band, primary_chan, bw_mhz)
+    if found:
+        center_idx, chans = found
+        return chan_index_to_freq(center_idx, band), chans
+    return primary_freq, [primary_chan]
 
 
 def get_ap_draw_center(ap: "AccessPoint") -> float:
-    """
-    MHz center to use when placing the spectrum shape for `ap`.
-    5/6 GHz: uses bonded block lookup tables.
-    2.4 GHz: uses iw_center_freq when available, else primary channel freq.
-    """
-    if ap.bandwidth_mhz > 20:
-        # 5 GHz: IEEE block lookup table
-        if ap.band == "5 GHz" and ap.channel:
-            center, _ = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
-            if center:
-                return float(center)
-        # 6 GHz: FCC/US 6 GHz bonded block lookup table
-        if ap.band == "6 GHz" and ap.channel:
-            center, chans = get_6ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
-            if center and len(chans) > 1:
-                return float(center)
-        # 2.4 GHz (or unknown): use iw-reported bonded block center when available
-        if ap.iw_center_freq:
-            return float(ap.iw_center_freq)
-    return float(ap.freq_mhz)
+    """MHz center to use when placing the spectrum shape for *ap*."""
+    center, _ = bonded_block(ap.band, ap.channel, ap.bandwidth_mhz, ap.iw_center_freq)
+    return float(center or ap.freq_mhz)
 
 
 def get_ap_channel_span(ap: "AccessPoint") -> str:
-    """
-    Human-readable channel-span string for the table.
+    """Human-readable channel span for the table, e.g. "116–128" or "36".
+
     5 GHz:   "116–128" (80 MHz), "100–128" (160 MHz), "36" (20 MHz).
     2.4 GHz: "6–10" (40 MHz HT40+), "2–6" (40 MHz HT40-).
     6 GHz:   "1–13" (80 MHz), "1–29" (160 MHz), "1–61" (320 MHz).
     """
-    if ap.band == "5 GHz" and ap.channel:
-        # Prefer iw center + formula; fall back to IEEE lookup table
-        if ap.iw_center_freq and ap.bandwidth_mhz > 20:
-            lo, hi = _block_channel_range(ap.iw_center_freq, ap.bandwidth_mhz, CH5)
-            if lo is not None and lo != hi:
-                return f"{lo}–{hi}"
-        _, chans = get_5ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
-        if len(chans) > 1:
-            return f"{chans[0]}–{chans[-1]}"
-        return str(ap.channel)
+    if not ap.channel:
+        return "?"
+    _center, chans = bonded_block(ap.band, ap.channel, ap.bandwidth_mhz, ap.iw_center_freq)
+    if len(chans) > 1:
+        return f"{chans[0]}–{chans[-1]}"
+    return str(ap.channel)
 
-    if ap.band == "2.4 GHz" and ap.channel:
-        if ap.iw_center_freq and ap.bandwidth_mhz == 40:
-            lo, hi = _block_channel_range(ap.iw_center_freq, 40, CH24)
-            if lo is not None and lo != hi:
-                return f"{lo}–{hi}"
-        return str(ap.channel)
 
-    if ap.band == "6 GHz" and ap.channel:
-        if ap.bandwidth_mhz > 20:
-            _cf, chans = get_6ghz_bonded_info(ap.channel, ap.bandwidth_mhz)
-            if len(chans) > 1:
-                return f"{chans[0]}–{chans[-1]}"
-            if ap.iw_center_freq:
-                lo, hi = _block_channel_range(ap.iw_center_freq, ap.bandwidth_mhz, CH6)
-                if lo is not None and lo != hi:
-                    return f"{lo}–{hi}"
-        return str(ap.channel)
+def punctured_subchannels(center_mhz: float, bw_mhz: int, bitmap: int) -> List[Tuple[float, float]]:
+    """(lo_MHz, hi_MHz) ranges of EHT-punctured 20 MHz subchannels.
 
-    return str(ap.channel) if ap.channel else "?"
+    Bit *i* of the Disabled Subchannel Bitmap (802.11be 9.4.2.322) marks the
+    i-th 20 MHz subchannel, counted from the lowest frequency of the BSS
+    bandwidth, as punctured.
+    """
+    if not bitmap or bw_mhz < 80:
+        return []
+    lo_edge = center_mhz - bw_mhz / 2.0
+    out: List[Tuple[float, float]] = []
+    for i in range(bw_mhz // 20):
+        if bitmap & (1 << i):
+            out.append((lo_edge + 20 * i, lo_edge + 20 * (i + 1)))
+    return out
+
+
+# Signal-quality zones in dBm.  Shared by the table, the details panel and the
+# graph axes so every view colours the same RSSI identically.
+DBM_EXCELLENT = -50
+DBM_GOOD = -60
+DBM_FAIR = -70
+DBM_WEAK = -80
+
+
+def dbm_color(dbm: float) -> QColor:
+    """Map an RSSI in dBm to the shared green → red quality palette."""
+    if dbm >= DBM_EXCELLENT:
+        return QColor(SIG_EXCELLENT)
+    if dbm >= DBM_GOOD:
+        return QColor(SIG_GOOD)
+    if dbm >= DBM_FAIR:
+        return QColor(SIG_FAIR)
+    if dbm >= DBM_WEAK:
+        return QColor(SIG_WEAK)
+    return QColor(SIG_POOR)
 
 
 def signal_color(signal: int) -> QColor:
-    """Map 0-100 signal to red→yellow→green."""
-    if signal >= 70:
-        return QColor(SIG_EXCELLENT)
-    if signal >= 50:
-        return QColor(SIG_FAIR_NM)
-    if signal >= 30:
-        return QColor(SIG_WEAK_NM)
-    return QColor(SIG_POOR_NM)
+    """Map a 0-100 nmcli SIGNAL percentage to the shared dBm palette."""
+    return dbm_color(signal_to_dbm(signal))
 
 
 def signal_to_dbm(signal: int) -> int:
-    """Approximate dBm from nmcli 0-100 SIGNAL."""
-    return int((signal / 2) - 100)
+    """Approximate dBm from the nmcli 0-100 SIGNAL value.
+
+    Exact inverse of NetworkManager's nm_wifi_utils_level_to_quality()
+    (src/core/nm-core-utils.c), which maps the scan RSSI linearly from
+    -100 dBm (0 %) to -40 dBm (100 %):
+        quality = 100 - (|clamp(dBm, -100, -40) + 40| × 100 / 60)
+    Only used when iw did not report the exact dBm for this BSS.
+    """
+    q = max(0, min(100, int(signal)))
+    return int(round(-40 - (100 - q) * 0.6))
 
 
 def ap_group_key(bssid: str) -> str:
     """Compute the AP-group key for a BSSID.
 
-    Groups BSSIDs belonging to the same physical AP by masking the low
-    nibble (4 bits) of the last octet.  Most enterprise APs allocate a
-    contiguous 16-address BSSID block for their various SSIDs / radios.
+    Groups BSSIDs belonging to the same physical AP by:
+      * masking the low nibble (4 bits) of the last octet — most enterprise
+        APs allocate a contiguous 16-address BSSID block for their SSIDs; and
+      * clearing the locally-administered (U/L) bit of the first octet — many
+        vendors derive extra radio/SSID BSSIDs by setting that bit on the
+        base MAC (e.g. 5C:22:8B:… and 5E:22:8B:…).
 
     Returns a normalised upper-case string, e.g. 'AC:2A:A1:33:16:E0'.
     If the BSSID is malformed the uppercased input is returned unchanged.
@@ -653,8 +691,21 @@ def ap_group_key(bssid: str) -> str:
     if len(parts) != 6:
         return bssid.upper()
     try:
+        first = int(parts[0], 16) & 0xFD  # clear U/L bit
         last = int(parts[5], 16) & 0xF0
+        parts[0] = f"{first:02X}"
         parts[5] = f"{last:02X}"
         return ":".join(parts)
     except ValueError:
         return bssid.upper()
+
+
+def ap_group_key_for(ap: "AccessPoint") -> str:
+    """AP-group key for an AccessPoint.
+
+    Wi-Fi 7 multi-link APs advertise an MLD MAC address shared by every
+    affiliated link (2.4/5/6 GHz radio); when present it identifies the
+    physical AP far more reliably than BSSID bit patterns.
+    """
+    mld = getattr(ap, "mld_mac", "") or ""
+    return ap_group_key(mld if mld else ap.bssid)
