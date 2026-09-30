@@ -1549,7 +1549,9 @@ class MainWindowLogicMixin:
         theme = _int("ui/theme_index", 0)
         if 0 <= theme < self._theme_combo.count():
             self._theme_combo.setCurrentIndex(theme)  # emits → _on_theme_change
-        self._channel_graph.set_grouping(st.value("graph/group_ssids", "true") not in (False, "false"))
+        mode = st.value("graph/multi_ssid_label", "apname")
+        if isinstance(mode, str):
+            self._channel_graph.set_label_mode(mode)
         tab = _int("ui/tab_index", 0)
         if 0 <= tab < self._tabs.count():
             self._tabs.setCurrentIndex(tab)
@@ -1577,7 +1579,7 @@ class MainWindowLogicMixin:
         st.setValue("filter/band", self._band_combo.currentText())
         st.setValue("ui/theme_index", self._theme_combo.currentIndex())
         st.setValue("ui/tab_index", self._tabs.currentIndex())
-        st.setValue("graph/group_ssids", self._channel_graph.is_grouping())
+        st.setValue("graph/multi_ssid_label", self._channel_graph.label_mode())
         st.setValue(
             "table/user_column_widths",
             {str(c): self._table.columnWidth(c) for c in sorted(self._user_sized_cols)},

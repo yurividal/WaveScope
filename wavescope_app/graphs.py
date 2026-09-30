@@ -223,6 +223,14 @@ class ChannelGraphWidget(QWidget):
 
     ap_highlighted = pyqtSignal(object)  # str | None
 
+    # Label shown for a radio carrying more than one SSID: (key, UI text).
+    LABEL_MODES: List[Tuple[str, str]] = [
+        ("stack", "All SSIDs stacked"),
+        ("apname", "AP name (fallback: BSSID)"),
+        ("bssid", "BSSID"),
+        ("shortest", "Single SSID (shortest)"),
+    ]
+
     _BANDS_ORDER: List[str] = ["2.4 GHz", "5 GHz", "6 GHz"]
     _BAND_EXTENTS: Dict[str, Tuple[int, int]] = {
         "2.4 GHz": (2385, 2500),
@@ -282,15 +290,21 @@ class ChannelGraphWidget(QWidget):
         opt_row = QHBoxLayout()
         opt_row.setContentsMargins(6, 2, 6, 2)
         opt_row.addStretch()
-        self._chk_group = QCheckBox("Group SSIDs per radio")
-        self._chk_group.setChecked(True)
-        self._chk_group.setToolTip(
-            "Draw BSSIDs that share one radio (same AP, channel and width,\n"
-            "within 3 dB) as a single shape with a combined label.\n"
-            "Signal height is unaffected: it is the strongest member's RSSI."
+        opt_row.addWidget(QLabel("Radios with several SSIDs:"))
+        self._label_mode_combo = QComboBox()
+        for key, text in self.LABEL_MODES:
+            self._label_mode_combo.addItem(text, key)
+        self._label_mode_combo.setCurrentIndex(
+            [k for k, _ in self.LABEL_MODES].index("apname")
         )
-        self._chk_group.toggled.connect(lambda _on: self._redraw())
-        opt_row.addWidget(self._chk_group)
+        self._label_mode_combo.setToolTip(
+            "BSSIDs sharing one radio (same AP, channel and width, within 3 dB)\n"
+            "are drawn as one shape at the strongest member's RSSI.\n"
+            "Choose what its label shows. Hovering the label, or selecting\n"
+            "one of its SSIDs, always shows the full SSID list."
+        )
+        self._label_mode_combo.currentIndexChanged.connect(lambda _i: self._redraw())
+        opt_row.addWidget(self._label_mode_combo)
         outer.addLayout(opt_row)
 
         self._panels_widget = QWidget()
@@ -357,11 +371,13 @@ class ChannelGraphWidget(QWidget):
         self._highlighted = bssid
         self._apply_highlight()
 
-    def is_grouping(self) -> bool:
-        return self._chk_group.isChecked()
+    def label_mode(self) -> str:
+        return self._label_mode_combo.currentData()
 
-    def set_grouping(self, on: bool) -> None:
-        self._chk_group.setChecked(bool(on))
+    def set_label_mode(self, mode: str) -> None:
+        idx = self._label_mode_combo.findData(mode)
+        if idx >= 0:
+            self._label_mode_combo.setCurrentIndex(idx)
 
     def members_of(self, bssid: Optional[str]) -> List[str]:
         """BSSIDs drawn together with *bssid* (just [bssid] when ungrouped)."""
@@ -577,9 +593,14 @@ class ChannelGraphWidget(QWidget):
             fc = QColor(color)
             fc.setAlpha(alpha_fill)
             items["fill"].setBrush(mkBrush(fc))
-            if items.get("alpha") != alpha_label:
-                items["alpha"] = alpha_label
-                items["label"].setHtml(self._label_html(items["lines"], alpha_label))
+            # A selected multi-SSID shape always shows its full SSID list,
+            # with the selected member marked.
+            expanded = h is not None and h in items["members"] and len(items["members"]) > 1
+            lines = self._expanded_lines(items["aps"], h) if expanded else items["lines"]
+            state = (alpha_label, expanded, h if expanded else None, tuple(t for t, _ in lines))
+            if items.get("render_state") != state:
+                items["render_state"] = state
+                items["label"].setHtml(self._label_html(lines, alpha_label))
 
     @staticmethod
     def _label_html(lines: List[Tuple[str, QColor]], alpha: int) -> str:
@@ -650,8 +671,6 @@ class ChannelGraphWidget(QWidget):
 
     def _build_shapes(self, visible: List[AccessPoint]) -> List[Tuple[str, List[AccessPoint]]]:
         """[(shape_key, members)] — members[0] is the strongest (drawn) BSS."""
-        if not self._chk_group.isChecked():
-            return [(ap.bssid, [ap]) for ap in visible]
         buckets: Dict[tuple, List[AccessPoint]] = {}
         for ap in visible:
             key = (
@@ -679,19 +698,35 @@ class ChannelGraphWidget(QWidget):
                 shapes.append((shape_key, cl))
         return shapes
 
-    def _label_lines(self, members: List[AccessPoint]) -> List[Tuple[str, QColor]]:
-        def line(ap: AccessPoint) -> Tuple[str, QColor]:
-            warn = "⚠ " if ap.bssid.lower() in self._collisions else ""
-            return warn + ap.display_ssid, self._ssid_colors.get(ap.ssid, QColor(FALLBACK_GRAY))
+    def _ssid_line(self, ap: AccessPoint, marker: str = "") -> Tuple[str, QColor]:
+        warn = "⚠ " if ap.bssid.lower() in self._collisions else ""
+        return marker + warn + ap.display_ssid, self._ssid_colors.get(ap.ssid, QColor(FALLBACK_GRAY))
 
-        if len(members) == 1:
-            return [line(members[0])]
+    def _expanded_lines(self, members: List[AccessPoint], selected: Optional[str] = None) -> List[Tuple[str, QColor]]:
+        """Every SSID on the radio, one per line; *selected* is marked ▸."""
         ordered = sorted(members, key=lambda a: (a.display_ssid.lower(), a.bssid))
-        if len(ordered) <= self._GROUP_MAX_LINES:
-            return [line(a) for a in ordered]
-        muted = QColor(self._theme_fg)
-        head = [line(a) for a in ordered[: self._GROUP_MAX_LINES - 1]]
-        return head + [(f"+{len(ordered) - len(head)} more", muted)]
+        return [self._ssid_line(a, "▸ " if a.bssid == selected else "") for a in ordered]
+
+    def _label_lines(self, members: List[AccessPoint]) -> List[Tuple[str, QColor]]:
+        """Label for a shape according to the multi-SSID label mode."""
+        if len(members) == 1:
+            return [self._ssid_line(members[0])]
+        mode = self.label_mode()
+        if mode == "stack":
+            return self._expanded_lines(members)
+        head = members[0]  # strongest member (its colour drew the curve)
+        color = self._ssid_colors.get(head.ssid, QColor(FALLBACK_GRAY))
+        warn = "⚠ " if any(a.bssid.lower() in self._collisions for a in members) else ""
+        count = f"  [{len(members)} SSIDs]"
+        if mode == "shortest":
+            short = min(members, key=lambda a: (len(a.display_ssid), a.display_ssid.lower()))
+            text, col = self._ssid_line(short)
+            return [(text + f"  [+{len(members) - 1}]", col)]
+        if mode == "bssid":
+            return [(warn + head.bssid + count, color)]
+        # "apname": AP name advertised by any member, else the BSSID
+        name = next((a.ap_name for a in members if a.ap_name), "")
+        return [(warn + (name or head.bssid) + count, color)]
 
     @staticmethod
     def _tooltip(members: List[AccessPoint]) -> str:
@@ -755,11 +790,10 @@ class ChannelGraphWidget(QWidget):
                 items["zero"].setData(xs, np.full_like(xs, floor))
                 items["curve"].setData(xs, ys)  # FillBetweenItem follows via sigPlotChanged
                 items["label"]._bssid = ap.bssid  # strongest member may change
-            if items.get("lines") != lines:
-                items["lines"] = lines
-                items.pop("alpha", None)  # force HTML re-render in _apply_highlight
+            items["lines"] = lines  # _apply_highlight re-renders only on change
             items["color"] = color
             items["members"] = member_ids
+            items["aps"] = members
             items["tooltip"] = self._tooltip(members)
             items["label"].setPos(center, ap.dbm)
             seen.add(shape_key)

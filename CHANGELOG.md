@@ -39,7 +39,7 @@ Full correctness pass over the 802.11 parsing, plus Wi-Fi 6E/7 and RF-analysis f
 - **Atomic writes** for the OUI database and Known SSIDs files.
 
 ### New Features
-- **SSIDs grouped per radio in the channel graph** — BSSIDs sharing one radio (same AP, channel and width, within 3 dB) are drawn as a single shape with a stacked, per-SSID-coloured label ("+N more" beyond three) instead of overlapping curves. Shape height stays the strongest member's RSSI; hover the label for every member, click it to select all of them. Toggle: "Group SSIDs per radio" above the graph (saved).
+- **SSIDs grouped per radio in the channel graph** — BSSIDs sharing one radio (same AP, channel and width, within 3 dB) are drawn as one shape at the strongest member's RSSI instead of overlapping curves. A new setting above the graph, "Radios with several SSIDs", chooses the label: AP name with BSSID fallback (default), BSSID, the shortest SSID, or all SSIDs stacked. Hovering the label always lists every member; selecting any of its SSIDs (click or table) expands the label to the full list with the selected one marked. The choice is saved.
 - **Settings saved between sessions** — theme, refresh interval, linger time, band filter, column widths, splitters and window geometry.
 - **Channel congestion score** — per 20 MHz channel from overlapping BSS count, signal and BSS Load utilization (hover the channel graph or see Details).
 - **BSS color collision alerts** — flagged in the graph (⚠), the status bar and Details.
