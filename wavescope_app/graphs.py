@@ -278,6 +278,21 @@ class ChannelGraphWidget(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        # Thin option row above the panels.
+        opt_row = QHBoxLayout()
+        opt_row.setContentsMargins(6, 2, 6, 2)
+        opt_row.addStretch()
+        self._chk_group = QCheckBox("Group SSIDs per radio")
+        self._chk_group.setChecked(True)
+        self._chk_group.setToolTip(
+            "Draw BSSIDs that share one radio (same AP, channel and width,\n"
+            "within 3 dB) as a single shape with a combined label.\n"
+            "Signal height is unaffected: it is the strongest member's RSSI."
+        )
+        self._chk_group.toggled.connect(lambda _on: self._redraw())
+        opt_row.addWidget(self._chk_group)
+        outer.addLayout(opt_row)
+
         self._panels_widget = QWidget()
         self._panels_layout = QHBoxLayout(self._panels_widget)
         self._panels_layout.setContentsMargins(0, 0, 0, 0)
@@ -341,6 +356,28 @@ class ChannelGraphWidget(QWidget):
     def highlight_bssid(self, bssid: Optional[str]):
         self._highlighted = bssid
         self._apply_highlight()
+
+    def is_grouping(self) -> bool:
+        return self._chk_group.isChecked()
+
+    def set_grouping(self, on: bool) -> None:
+        self._chk_group.setChecked(bool(on))
+
+    def members_of(self, bssid: Optional[str]) -> List[str]:
+        """BSSIDs drawn together with *bssid* (just [bssid] when ungrouped)."""
+        if not bssid:
+            return []
+        for items in self._items.values():
+            if bssid in items["members"]:
+                return list(items["members"])
+        return [bssid]
+
+    def same_shape(self, bssids: set) -> bool:
+        """True when all *bssids* are drawn as one grouped shape."""
+        if not bssids:
+            return False
+        first = next(iter(bssids))
+        return bssids <= set(self.members_of(first))
 
     # ── Internal ──────────────────────────────────────────────────────────
 
@@ -528,8 +565,8 @@ class ChannelGraphWidget(QWidget):
 
     def _apply_highlight(self):
         h = self._highlighted
-        for bssid, items in self._items.items():
-            if h is None or bssid == h:
+        for items in self._items.values():
+            if h is None or h in items["members"]:
                 alpha_curve, alpha_fill, alpha_label = 255, 55, 255
             else:
                 alpha_curve, alpha_fill, alpha_label = 28, 12, 40
@@ -540,14 +577,27 @@ class ChannelGraphWidget(QWidget):
             fc = QColor(color)
             fc.setAlpha(alpha_fill)
             items["fill"].setBrush(mkBrush(fc))
-            items["label"].setColor(
-                QColor(color.red(), color.green(), color.blue(), alpha_label)
-            )
+            if items.get("alpha") != alpha_label:
+                items["alpha"] = alpha_label
+                items["label"].setHtml(self._label_html(items["lines"], alpha_label))
+
+    @staticmethod
+    def _label_html(lines: List[Tuple[str, QColor]], alpha: int) -> str:
+        """Centered multi-line label; each line in its own SSID colour."""
+        out = []
+        for text, col in lines:
+            rgba = f"rgba({col.red()},{col.green()},{col.blue()},{alpha / 255:.2f})"
+            out.append(f'<span style="color:{rgba}">{html.escape(text)}</span>')
+        return '<div style="text-align:center; font-weight:600">' + "<br>".join(out) + "</div>"
 
     def _on_mouse_hover(self, band: str, pw: "PlotWidget", pos) -> None:
         if not pw.sceneBoundingRect().contains(pos):
             QToolTip.hideText()
             return
+        for items in self._items.values():
+            if items["band"] == band and items["label"].sceneBoundingRect().contains(pos):
+                QToolTip.showText(QCursor.pos(), items["tooltip"], pw)
+                return
         view_pos = pw.plotItem.vb.mapSceneToView(pos)
         freq = view_pos.x()
         channels = self._band_channels.get(band, {})
@@ -591,6 +641,72 @@ class ChannelGraphWidget(QWidget):
         ys = floor + (ap.dbm - floor) * unit
         return xs, ys, center
 
+    # Members within this many dB of the strongest are treated as the same
+    # radio.  Virtual BSSIDs of one radio share a transmitter, so their
+    # beacons arrive within ~1-2 dB; anything further apart is drawn apart.
+    _GROUP_DB_TOLERANCE = 3
+    # Label lines before collapsing into "+N more".
+    _GROUP_MAX_LINES = 3
+
+    def _build_shapes(self, visible: List[AccessPoint]) -> List[Tuple[str, List[AccessPoint]]]:
+        """[(shape_key, members)] — members[0] is the strongest (drawn) BSS."""
+        if not self._chk_group.isChecked():
+            return [(ap.bssid, [ap]) for ap in visible]
+        buckets: Dict[tuple, List[AccessPoint]] = {}
+        for ap in visible:
+            key = (
+                ap_group_key_for(ap),
+                ap.band,
+                ap.channel,
+                ap.bandwidth_mhz,
+                int(round(get_ap_draw_center(ap))),
+                ap.is_lingering,
+            )
+            buckets.setdefault(key, []).append(ap)
+        shapes: List[Tuple[str, List[AccessPoint]]] = []
+        for key, aps in buckets.items():
+            aps.sort(key=lambda a: -a.dbm)
+            clusters: List[List[AccessPoint]] = []
+            for ap in aps:
+                for cl in clusters:
+                    if cl[0].dbm - ap.dbm <= self._GROUP_DB_TOLERANCE:
+                        cl.append(ap)
+                        break
+                else:
+                    clusters.append([ap])
+            for idx, cl in enumerate(clusters):
+                shape_key = cl[0].bssid if len(cl) == 1 else "grp|" + "|".join(map(str, key)) + f"|{idx}"
+                shapes.append((shape_key, cl))
+        return shapes
+
+    def _label_lines(self, members: List[AccessPoint]) -> List[Tuple[str, QColor]]:
+        def line(ap: AccessPoint) -> Tuple[str, QColor]:
+            warn = "⚠ " if ap.bssid.lower() in self._collisions else ""
+            return warn + ap.display_ssid, self._ssid_colors.get(ap.ssid, QColor(FALLBACK_GRAY))
+
+        if len(members) == 1:
+            return [line(members[0])]
+        ordered = sorted(members, key=lambda a: (a.display_ssid.lower(), a.bssid))
+        if len(ordered) <= self._GROUP_MAX_LINES:
+            return [line(a) for a in ordered]
+        muted = QColor(self._theme_fg)
+        head = [line(a) for a in ordered[: self._GROUP_MAX_LINES - 1]]
+        return head + [(f"+{len(ordered) - len(head)} more", muted)]
+
+    @staticmethod
+    def _tooltip(members: List[AccessPoint]) -> str:
+        head = members[0]
+        rows = [
+            f"{a.display_ssid}  ·  {a.bssid}  ·  {a.dbm} dBm  ·  {a.security_short}"
+            for a in sorted(members, key=lambda a: -a.dbm)
+        ]
+        title = (
+            f"{len(members)} SSIDs on one radio — {head.band} ch {head.channel}, {head.bandwidth_mhz} MHz"
+            if len(members) > 1
+            else f"{head.band} ch {head.channel}, {head.bandwidth_mhz} MHz"
+        )
+        return title + "\n" + "\n".join(rows)
+
     def _redraw(self):
         visible = [a for a in self._aps if self._band == "All" or a.band == self._band]
         needed = self._needed_bands(visible)
@@ -601,28 +717,26 @@ class ChannelGraphWidget(QWidget):
 
         floor = float(CHAN_DBM_FLOOR)
         seen: set = set()
-        for ap in visible:
+        for shape_key, members in self._build_shapes(visible):
+            ap = members[0]  # strongest member defines the drawn shape
             pw = self._plots.get(ap.band)
             if pw is None:
                 continue
             xs, ys, center = self._shape(ap)
             color = self._ssid_colors.get(ap.ssid, QColor(FALLBACK_GRAY))
-            text = ("⚠ " if ap.bssid.lower() in self._collisions else "") + ap.display_ssid
-            items = self._items.get(ap.bssid)
+            lines = self._label_lines(members)
+            member_ids = [a.bssid for a in members]
+            items = self._items.get(shape_key)
             if items is not None and items["band"] != ap.band:
-                self._remove_items(ap.bssid)
+                self._remove_items(shape_key)
                 items = None
             if items is None:
                 zero_item = pg.PlotCurveItem(xs, np.full_like(xs, floor), pen=pg.mkPen(None))
                 curve_item = pg.PlotCurveItem(xs, ys, pen=mkPen(color=color, width=2))
                 fill_item = pg.FillBetweenItem(zero_item, curve_item, brush=mkBrush(color))
-                label = _ClickableLabel(
-                    bssid=ap.bssid,
-                    on_click=self._on_label_click,
-                    text=text,
-                    color=color,
-                    anchor=(0.5, 1.1),
-                )
+                # Clicking a grouped label reports its strongest member; the
+                # main window expands it to all members via members_of().
+                label = _ClickableLabel(bssid=ap.bssid, on_click=self._on_label_click, anchor=(0.5, 1.05))
                 lf = QFont()
                 lf.setPointSize(8)
                 lf.setBold(True)
@@ -631,26 +745,27 @@ class ChannelGraphWidget(QWidget):
                     pw.addItem(it)
                 items = {
                     "band": ap.band,
-                    "color": color,
                     "zero": zero_item,
                     "fill": fill_item,
                     "curve": curve_item,
                     "label": label,
-                    "text": text,
                 }
-                self._items[ap.bssid] = items
+                self._items[shape_key] = items
             else:
                 items["zero"].setData(xs, np.full_like(xs, floor))
                 items["curve"].setData(xs, ys)  # FillBetweenItem follows via sigPlotChanged
-                items["color"] = color
-                if items["text"] != text:
-                    items["label"].setText(text)
-                    items["text"] = text
+                items["label"]._bssid = ap.bssid  # strongest member may change
+            if items.get("lines") != lines:
+                items["lines"] = lines
+                items.pop("alpha", None)  # force HTML re-render in _apply_highlight
+            items["color"] = color
+            items["members"] = member_ids
+            items["tooltip"] = self._tooltip(members)
             items["label"].setPos(center, ap.dbm)
-            seen.add(ap.bssid)
+            seen.add(shape_key)
 
-        for bssid in [b for b in self._items if b not in seen]:
-            self._remove_items(bssid)
+        for key in [k for k in self._items if k not in seen]:
+            self._remove_items(key)
         self._apply_highlight()
 
     def _remove_items(self, bssid: str) -> None:

@@ -499,20 +499,42 @@ class MainWindowLogicMixin:
         super().keyPressEvent(event)
 
     def _on_graph_highlight(self, bssid: Optional[str]):
-        """Called when user clicks a label in the channel graph."""
+        """Called when user clicks a label in the channel graph.
+
+        A grouped label stands for every SSID on that radio, so all of its
+        BSSIDs are selected in the table and shown in the signal history.
+        """
         if bssid is None:
             self._table.clearSelection()
             self._history_graph.filter_bssids(None)
             return
-        # Find the row for this bssid and select it
-        for row in range(self._model.rowCount()):
-            ap = self._model.ap_at(row)
-            if ap and ap.bssid == bssid:
-                proxy_row = self._proxy.mapFromSource(self._model.index(row, 0)).row()
-                if proxy_row >= 0:
-                    self._table.selectRow(proxy_row)
-                break
-        self._history_graph.filter_bssids({bssid})
+        members = self._channel_graph.members_of(bssid) or [bssid]
+        sm = self._table.selectionModel()
+        sm.blockSignals(True)
+        try:
+            sm.clearSelection()
+            for i, b in enumerate(members):
+                row = self._model.row_of_bssid(b)
+                if row < 0:
+                    continue
+                pidx = self._proxy.mapFromSource(self._model.index(row, 0))
+                if not pidx.isValid():
+                    continue
+                flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+                if b == bssid:
+                    flags |= QItemSelectionModel.SelectionFlag.Current
+                    self._table.scrollTo(pidx)
+                sm.select(pidx, flags)
+                if b == bssid:
+                    sm.setCurrentIndex(pidx, QItemSelectionModel.SelectionFlag.NoUpdate)
+        finally:
+            sm.blockSignals(False)
+        # Details for the clicked (strongest) member; graph keeps its highlight.
+        row = self._model.row_of_bssid(bssid)
+        ap = self._model.ap_at(row) if row >= 0 else None
+        if ap is not None:
+            self._show_details(ap)
+        self._history_graph.filter_bssids(set(members))
 
     def _on_selection_change(self, selected, deselected):
         indexes = self._table.selectionModel().selectedRows()
@@ -539,7 +561,12 @@ class MainWindowLogicMixin:
                     selected_bssids.add(a.bssid)
             self._history_graph.filter_bssids(selected_bssids)
             # Highlight single selection in channel graph
-            single_bssid = ap.bssid if len(selected_bssids) == 1 else None
+            # One BSSID, or several that the graph draws as one grouped shape.
+            single_bssid = (
+                ap.bssid
+                if len(selected_bssids) == 1 or self._channel_graph.same_shape(selected_bssids)
+                else None
+            )
             self._channel_graph.highlight_bssid(single_bssid)
 
     # ── Context menu ─────────────────────────────────────────────────────
@@ -1522,6 +1549,7 @@ class MainWindowLogicMixin:
         theme = _int("ui/theme_index", 0)
         if 0 <= theme < self._theme_combo.count():
             self._theme_combo.setCurrentIndex(theme)  # emits → _on_theme_change
+        self._channel_graph.set_grouping(st.value("graph/group_ssids", "true") not in (False, "false"))
         tab = _int("ui/tab_index", 0)
         if 0 <= tab < self._tabs.count():
             self._tabs.setCurrentIndex(tab)
@@ -1549,6 +1577,7 @@ class MainWindowLogicMixin:
         st.setValue("filter/band", self._band_combo.currentText())
         st.setValue("ui/theme_index", self._theme_combo.currentIndex())
         st.setValue("ui/tab_index", self._tabs.currentIndex())
+        st.setValue("graph/group_ssids", self._channel_graph.is_grouping())
         st.setValue(
             "table/user_column_widths",
             {str(c): self._table.columnWidth(c) for c in sorted(self._user_sized_cols)},
