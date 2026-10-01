@@ -1189,7 +1189,11 @@ class MainWindowLogicMixin:
         if ap.bandwidth_mhz > 20 and int(center) != ap.freq_mhz:
             freq_text += f"  ·  {int(center)} MHz block center"
         v["frequency"].setText(freq_text)
-        width_txt = f"{ap.bandwidth_mhz} MHz" + (" (80+80, non-contiguous)" if ap.iw_80p80 else "")
+        width_txt = f"{ap.bandwidth_mhz} MHz"
+        if ap.iw_80p80:
+            width_txt = "80+80 MHz (non-contiguous)"
+            if ap.iw_center_freq2:
+                width_txt += f"<br>{dim(f'Second 80 MHz segment centred at {ap.iw_center_freq2} MHz (graph shows the primary segment)')}"
         if ap.radio_params_from:
             width_txt += "<br>" + dim(
                 f"Radio parameters from sibling BSSID {ap.radio_params_from} (iw has no data for this BSSID)"

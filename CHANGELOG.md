@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.1.1 — 2026-10-01
 
 ### Fixes — wrong data found in a spec review against iw, hostap, Wireshark and nmcli sources
 - **Impossible 60-63 Mbps "rates" on Wi-Fi 6E/7 APs** — iw prints BSS membership selectors (HE, EHT, SAE-H2E-only …) as pseudo-rates such as `61.5*`; they were counted as basic/legacy rates. Real rates never exceed 54 Mbps, so selectors are now skipped.
@@ -10,6 +10,14 @@
 - **TPC / Cisco TX power of 128–255 dBm** — the Transmit Power octets are signed but iw prints them unsigned; they are now sign-converted and values outside −20…40 dBm discarded.
 - **Open side of an OWE transition pair labelled "OWE"** (NetworkManager data source only) — nmcli emits the same `owe` flag for OWE and OWE-transition; the SECURITY column's `OWE-TM` is now honoured.
 - **AKM 11 (802.1X Suite-B, 128-bit) labelled "WPA3 (802.1X-192)"** — only AKM 12 and FT-SHA-384 (13) are 192-bit.
+- **Reduced Neighbor Report flags read from the wrong byte** — the "same SSID" / "co-located" flags sit at a length-dependent offset (802.11ax Table 9-281); they were only read for the 12/13/16-byte layouts. All layouts are handled and reserved lengths skipped.
+- **80+80 MHz BSSs drawn as one 160 MHz block** — they are now detected like hostap does (any non-contiguous CCFS1) and drawn as the 80 MHz segment that holds the primary channel, labelled 80+80 with the second segment's centre in Details.
+- **160 MHz max rate used the ≤80 MHz stream count** — the 160 MHz MCS/NSS set is used when the AP operates at 160 MHz, so an AP with 4 streams at 80 but 2 at 160 no longer shows double its real rate.
+- **6 GHz and WPA3 PMF checks** — the Issues tab now checks the actual AKMs and PMF setting instead of the label text: PSK/transition modes and PMF-optional on 6 GHz are flagged, WPA3-Personal (SAE-only) and OWE must have PMF required, transition mode must have PMF capable.
+- **PMF shows "N/A"** on Open / WEP / WPA1-only networks instead of "No".
+- **WPA3 compatibility mode** (RSN Element Override carrying SAE) is marked "(+WPA3 override)" after the base WPA2 label.
+- **802.11k** is detected from the exact "Neighbor Report" capability line (not "Neighbor Report TSF Offset").
+- **Wireshark cross-check** now also compares basic/legacy rates, 802.11k/v bits, country power limits, TPC power and Reduced Neighbor Report BSSIDs/flags — the fields whose bugs it previously could not see. Live run: 23 fields, 0 mismatches.
 
 ## v2.1.0 — 2026-10-01
 

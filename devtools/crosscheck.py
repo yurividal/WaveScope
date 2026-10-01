@@ -106,18 +106,10 @@ class Anonymizer:
     def text(self, text: str) -> str:
         # 1. colon-form MACs
         text = self.MAC_RE.sub(lambda m: self.mac(m.group(1)) if m.group(1)[0].isalnum() else m.group(1), text)
-        # 2. raw byte runs of known MACs inside hex dumps ("aa bb cc dd ee ff")
-        for real, fake in list(self._macs.items()):
-            text = text.replace(real.replace(":", " "), fake.replace(":", " "))
-        # 3. raw IEs the parser does not use can hide SSIDs/names (e.g. the
-        #    Multiple-BSSID element 71 carries other SSIDs): drop them.
-        keep_ids = {"54", "133", "150", "201", "244"}
-        text = re.sub(
-            r"(?m)^\tUnknown IE \((\d+)\):.*\n",
-            lambda m: m.group(0) if m.group(1) in keep_ids else "",
-            text,
-        )
-        # 3b. RNR (IE 201): rewrite every neighbor BSSID and short-SSID field
+        # 2. RNR (IE 201), BEFORE the generic byte-run pass so each neighbour
+        #    BSSID is mapped exactly once (mapping fake bytes again would
+        #    diverge from the oracle's single mapping).
+        #    RNR: rewrite every neighbor BSSID and short-SSID field
         #     structurally — neighbors may never be heard directly, so their
         #     MACs are not in the colon-form map yet.
         def rnr(m: "re.Match") -> str:
@@ -139,6 +131,17 @@ class Anonymizer:
                     pos += info_len
             return m.group(1) + " ".join(f"{b:02x}" for b in raw)
         text = re.sub(r"(?m)^(\tUnknown IE \(201\): )([0-9a-f ]+?)\s*$", rnr, text)
+        # 3. raw byte runs of known MACs inside hex dumps ("aa bb cc dd ee ff")
+        for real, fake in list(self._macs.items()):
+            text = text.replace(real.replace(":", " "), fake.replace(":", " "))
+        # 3. raw IEs the parser does not use can hide SSIDs/names (e.g. the
+        #    Multiple-BSSID element 71 carries other SSIDs): drop them.
+        keep_ids = {"54", "133", "150", "201", "244"}
+        text = re.sub(
+            r"(?m)^\tUnknown IE \((\d+)\):.*\n",
+            lambda m: m.group(0) if m.group(1) in keep_ids else "",
+            text,
+        )
         # 3c. vendor IE data can embed MACs/serials: keep only short payloads
         #     (≤ 5 bytes, e.g. the Ruckus TX-power element), else the subtype.
         text = re.sub(
@@ -238,6 +241,8 @@ def main() -> int:
                     v["ssid"] = anon.ssid(_iw_escape(v["ssid"]))
                 if v.get("mld_mac"):
                     v["mld_mac"] = anon.mac(v["mld_mac"])
+                if v.get("rnr_bssids"):
+                    v["rnr_bssids"] = sorted(anon.mac(b) for b in v["rnr_bssids"])
                 anon_vals[anon.mac(b)] = v
             values = anon_vals
         with open(os.path.join(fx, "iw_scan.txt"), "w", encoding="utf-8") as fh:

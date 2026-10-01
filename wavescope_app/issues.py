@@ -16,6 +16,11 @@ from .core_models import PSC_6GHZ_CHANNELS, AccessPoint
 
 SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
 
+# AKM groups (iw's suite names, see core_scanner._akm_suites)
+_SAE_AKMS = {"SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY"}
+_PSK_AKMS = {"PSK", "FT/PSK", "PSK/SHA-256", "PSK/SHA-384", "FT/PSK/SHA-384"}
+_WPA3_ENT_AKMS = {"802.1X/SHA-256", "802.1X/SUITE-B-192", "FT/802.1X/SHA-384"}
+
 
 @dataclass
 class Issue:
@@ -32,8 +37,8 @@ CHECKS: Dict[str, tuple] = {
     "wep": ("error", "WEP encryption"),
     "open": ("warning", "Open network (no encryption)"),
     "tkip": ("warning", "WPA1 / TKIP still enabled"),
-    "six_ghz_security": ("error", "6 GHz BSS without WPA3 / OWE"),
-    "sae_without_pmf": ("error", "WPA3-SAE without PMF"),
+    "six_ghz_security": ("error", "6 GHz security not compliant (PSK / PMF / transition)"),
+    "sae_without_pmf": ("error", "WPA3 / OWE without the required PMF"),
     "pmf_off": ("info", "PMF disabled on WPA2"),
     "b_rates": ("warning", "802.11b rates enabled (2.4 GHz)"),
     "wide_24": ("warning", "40 MHz channel on 2.4 GHz"),
@@ -104,10 +109,43 @@ def detect_issues(aps: Sequence[AccessPoint], cfg: IssueSettings = None) -> List
                 "TKIP is deprecated and HT/VHT/HE rates are not allowed with it; clients on TKIP fall back to 54 Mbps.",
                 [ap],
             )
-        if ap.band == "6 GHz" and not ("WPA3" in sec or sec == "OWE"):
-            add("six_ghz_security", "6 GHz without WPA3/OWE", f"6 GHz requires WPA3 or OWE (with PMF); this BSS shows {sec}.", [ap])
-        if akms & {"SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY"} and ap.pmf == "No":
-            add("sae_without_pmf", "WPA3-SAE without PMF", "WPA3 requires Protected Management Frames (PMF).", [ap])
+        sae_akm = bool(akms & _SAE_AKMS)
+        psk_akm = bool(akms & _PSK_AKMS)
+        owe_akm = "OWE" in akms
+        ent_wpa3 = bool(akms & _WPA3_ENT_AKMS)
+        if ap.band == "6 GHz" and (ap.iw_seen or ap.iw_restored):
+            # 6 GHz operation (802.11ax 12.12.2 — spec text not verified
+            # locally; mirrored by WFA Wi-Fi 6E rules): only SAE, OWE or
+            # 802.1X-SHA256/Suite-B AKMs, no PSK, PMF required, no WEP/TKIP/
+            # open; transition modes are not permitted.
+            problems = []
+            if psk_akm:
+                problems.append("PSK AKM (WPA2 or WPA2/WPA3 transition)")
+            if not (sae_akm or owe_akm or ent_wpa3):
+                problems.append(f"no WPA3/OWE AKM ({sec})")
+            if ap.pmf != "Required":
+                problems.append(f"PMF {ap.pmf.lower() if ap.pmf else 'unknown'} (must be required)")
+            if problems:
+                add(
+                    "six_ghz_security", "6 GHz security not compliant",
+                    "6 GHz requires WPA3-Personal (SAE), WPA3-Enterprise or OWE with PMF required, "
+                    "and no transition mode: " + "; ".join(problems) + ".",
+                    [ap],
+                )
+        if sae_akm and not psk_akm and ap.pmf != "Required":
+            add(
+                "sae_without_pmf", "WPA3-Personal without PMF required",
+                f"A WPA3-Personal (SAE-only) BSS must set PMF to required; this BSS has PMF {ap.pmf.lower() or 'unknown'}.",
+                [ap],
+            )
+        elif sae_akm and psk_akm and ap.pmf == "No":
+            add(
+                "sae_without_pmf", "WPA2/WPA3 transition without PMF",
+                "WPA3 transition mode requires PMF capable (optional); PMF is disabled here.",
+                [ap],
+            )
+        if owe_akm and ap.pmf != "Required":
+            add("sae_without_pmf", "OWE without PMF required", "Enhanced Open (OWE) requires PMF.", [ap])
         if sec.startswith("WPA2 (") and ap.pmf == "No":
             add("pmf_off", "PMF disabled", "WPA2 with PMF capable (optional) is recommended; it protects deauth/disassoc frames.", [ap])
         if ap.band == "2.4 GHz" and ap.has_11b_rates:

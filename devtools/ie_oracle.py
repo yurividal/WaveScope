@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -85,6 +86,18 @@ FIELDS = [
     "wlan.tim.dtim_period",
     "wlan.mobility_domain.mdid",
     "wlan.eht.multi_link.common_info.ap_mld_mac_address",
+    # added after the 2.1 spec review: fields whose bugs the oracle missed
+    "wlan.supported_rates",
+    "wlan.extended_supported_rates",
+    "wlan.rmcap.b1",
+    "wlan.extcap.b19",
+    "wlan.country_info.fnm.fcn",
+    "wlan.country_info.fnm.nc",
+    "wlan.country_info.fnm.mtpl",
+    "wlan.tpcrep.trsmt_pow",
+    "wlan.rnr.tbtt_info.bssid",
+    "wlan.rnr.tbtt_info.bss_parameters.same_ssid",
+    "wlan.rnr.tbtt_info.bss_parameters.colocated_ap",
 ]
 
 # Fields compared, in report order.
@@ -105,6 +118,15 @@ COMPARED = [
     "mld_mac",
     "ap_power_type",
     "punct_bitmap",
+    "basic_rates",
+    "max_legacy_rate",
+    "rrm",
+    "btm",
+    "country_power",
+    "tpc_dbm",
+    "rnr_bssids",
+    "rnr_same_ssid_count",
+    "rnr_colocated_count",
 ]
 
 
@@ -283,7 +305,95 @@ def normalize_tshark(rows: List[Dict[str, str]], freq: int) -> Dict[str, object]
     pb = as_int("wlan.eht.eht_operation_information.disabled_subchannel_bitmap")
     out["punct_bitmap"] = pb if pb else None
     out["ssid"] = _tshark_ssid(f.get("wlan.ssid", ""))
+    rates, basic = _rates(f)
+    out["basic_rates"] = " ".join(f"{r:g}" for r in sorted(set(basic))) if rates else None
+    out["max_legacy_rate"] = max(rates) if rates else None
+    out["rrm"] = first("wlan.rmcap.b1").lower() in ("1", "true") if "wlan.rmcap.b1" in f else None
+    out["btm"] = first("wlan.extcap.b19").lower() in ("1", "true") if "wlan.extcap.b19" in f else None
+    out["country_power"] = _country_power(f, _band(freq))
+    tpc = as_int("wlan.tpcrep.trsmt_pow")
+    if tpc is not None and tpc > 127:
+        tpc -= 256
+    out["tpc_dbm"] = tpc if tpc is not None and -20 <= tpc <= 40 else None
+    # FT_BYTES: tshark prints "847848ea44d6" or "84:78:48:ea:44:d6" depending on version
+    rnr_bssids = sorted({_mac(x) for x in (f.get("wlan.rnr.tbtt_info.bssid", "") or "").split(",") if x.strip()})
+    out["rnr_bssids"] = rnr_bssids or None
+    flags = lambda key: sum(1 for x in (f.get(key, "") or "").split(",") if x.strip().lower() in ("1", "true"))  # noqa: E731
+    out["rnr_same_ssid_count"] = flags("wlan.rnr.tbtt_info.bss_parameters.same_ssid") if rnr_bssids else None
+    out["rnr_colocated_count"] = flags("wlan.rnr.tbtt_info.bss_parameters.colocated_ap") if rnr_bssids else None
     return out
+
+
+def _rate_octets(value: str) -> List[int]:
+    """Raw Supported Rates octets from a tshark field value.
+
+    tshark may print the octets numerically ("0x8c", "140") or resolved
+    ("6(B)", "HE PHY"); both forms are handled.  Membership selectors
+    (0xFA-0xFF / 120-127 after masking) are reported as 0 and skipped by
+    the caller.
+    """
+    out: List[int] = []
+    for tok in (value or "").split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            out.append(int(tok, 0))
+            continue
+        except ValueError:
+            pass
+        m = re.match(r"^(\d+(?:\.\d+)?)(\(B\))?$", tok)
+        if m:
+            out.append(int(round(float(m.group(1)) * 2)) | (0x80 if m.group(2) else 0))
+        else:
+            out.append(0)  # resolved selector name ("HE PHY", "VHT PHY", …)
+    return out
+
+
+def _rates(f: Dict[str, str]) -> Tuple[List[float], List[float]]:
+    rates: List[float] = []
+    basic: List[float] = []
+    for key in ("wlan.supported_rates", "wlan.extended_supported_rates"):
+        for octet in _rate_octets(f.get(key, "")):
+            r = octet & 0x7F
+            if r == 0 or r >= 120:  # 120-127 = BSS membership selectors
+                continue
+            rates.append(r / 2.0)
+            if octet & 0x80:
+                basic.append(r / 2.0)
+    return rates, basic
+
+
+def _country_power(f: Dict[str, str], band: str) -> Optional[str]:
+    """Power-limit summary from the Country element triplets.
+
+    Wireshark gives first channel / number of channels / max power per
+    triplet.  End channel = first + step·(n−1) with step 1 on 2.4 GHz and 4
+    on 5/6 GHz (6 GHz channels start at 1 but are 4 apart).  Equal-power
+    triplets merge only when contiguous — the same display rule WaveScope
+    applies, written from the triplet fields rather than from iw's text.
+    """
+    fcn = [int(x, 0) for x in (f.get("wlan.country_info.fnm.fcn", "") or "").split(",") if x.strip()]
+    nc = [int(x, 0) for x in (f.get("wlan.country_info.fnm.nc", "") or "").split(",") if x.strip()]
+    mtpl = [int(x, 0) for x in (f.get("wlan.country_info.fnm.mtpl", "") or "").split(",") if x.strip()]
+    if not fcn or not (len(fcn) == len(nc) == len(mtpl)):
+        return None
+    runs: List[List[int]] = []
+    for first, n, pwr in zip(fcn, nc, mtpl):
+        if first > 200:
+            continue  # operating-class (extension) triplet, not a channel range
+        step = 4 if (band == "6" or first > 14) else 1
+        hi = first + step * (n - 1)
+        if runs and runs[-1][2] == pwr and runs[-1][3] == step and first == runs[-1][1] + step:
+            runs[-1][1] = hi
+        else:
+            runs.append([first, hi, pwr, step])
+    return "; ".join((f"ch {lo}" if lo == hi else f"ch {lo}–{hi}") + f": {p} dBm" for lo, hi, p, _ in runs) or None
+
+
+def _mac(value: str) -> str:
+    h = re.sub(r"[^0-9a-fA-F]", "", value).lower()
+    return ":".join(h[i:i + 2] for i in range(0, 12, 2)) if len(h) == 12 else value.strip().lower()
 
 
 def _tshark_ssid(value: str) -> str:
@@ -315,13 +425,17 @@ def normalize_wavescope(d: dict) -> Dict[str, object]:
     else:
         prim = None
     mld = d.get("mld_mac") or None
+    # Wireshark reports RSN-Override AKMs under the same field as the base
+    # RSNE (dissect_wfa_rsn_override → dissect_rsn_ie), so compare the union.
+    akms = set(d.get("rsn_akm_suites", ())) | set((d.get("rsn_override_akm") or "").split())
+    rnr = [n for n in d.get("rnr_neighbors", ()) if n.get("bssid")]
     return {
         "ssid": d.get("ssid"),
         "primary_channel": prim,
         "oper_bw": d.get("iw_oper_bw"),
         "center_mhz": d.get("iw_center_freq"),
         "pmf": d.get("pmf") if d.get("has_rsn_ie") else None,
-        "akms": sorted(set(d.get("rsn_akm_suites", ()))) or None,
+        "akms": sorted(akms) or None,
         "bss_color": d.get("bss_color"),
         "bss_color_disabled": d.get("bss_color_disabled") if d.get("bss_color") is not None else None,
         "station_count": d.get("station_count"),
@@ -332,6 +446,16 @@ def normalize_wavescope(d: dict) -> Dict[str, object]:
         "mld_mac": mld,
         "ap_power_type": d.get("he_6ghz_ap_type") or None,
         "punct_bitmap": d.get("punct_bitmap") or None,
+        "basic_rates": (d.get("basic_rates") or "") if d.get("max_legacy_rate") else None,
+        "max_legacy_rate": d.get("max_legacy_rate") or None,
+        # None when the element is absent, like Wireshark (no field emitted)
+        "rrm": d.get("rrm") if d.get("_has_rm_ie") else None,
+        "btm": d.get("btm") if d.get("_has_extcap_ie") else None,
+        "country_power": d.get("country_power") or None,
+        "tpc_dbm": d.get("tpc_tx_power_dbm"),
+        "rnr_bssids": sorted({str(n["bssid"]).lower() for n in rnr}) or None,
+        "rnr_same_ssid_count": sum(1 for n in rnr if n.get("same_ssid")) if rnr else None,
+        "rnr_colocated_count": sum(1 for n in rnr if n.get("colocated")) if rnr else None,
     }
 
 

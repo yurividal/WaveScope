@@ -61,6 +61,7 @@ class AccessPoint:
     country_env: str = ""  # Country IE environment (Indoor/Outdoor/…)
     country_power: str = ""  # Country IE per-channel max TX power summary
     iw_80p80: bool = False  # BSS uses non-contiguous 80+80 MHz
+    iw_center_freq2: Optional[int] = None  # second 80 MHz segment center (80+80)
     bss_color: Optional[int] = None  # HE BSS color (1-63)
     bss_color_disabled: bool = False
     he_6ghz_ap_type: str = ""  # 6 GHz AP power type (LPI / SP / VLP …)
@@ -228,12 +229,18 @@ class AccessPoint:
             if "owe" in rsn_tokens and "OWE-TM" not in sec_tokens:
                 akms.add("OWE")
 
-        # The open side of an OWE transition pair has no RSN IE even though
-        # nmcli reports the "owe" flag for it; don't count that flag as RSN.
+        label = self._security_label(sec_tokens, rsn_tokens, wpa_tokens, akms)
+        # WPA3 compatibility mode: the RSN Element Override advertises SAE to
+        # RSNO-aware clients while the base RSNE stays WPA2 for everyone else.
+        rsno = set((self.rsn_override_akm or "").split())
+        if rsno & {"SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY"} and "WPA3" not in label:
+            label += " (+WPA3 override)"
+        return label
+
+    def _security_label(self, sec_tokens, rsn_tokens, wpa_tokens, akms) -> str:
         ignored = {"(none)", "--"} | ({"owe"} if "OWE-TM" in sec_tokens else set())
         has_rsn = self.has_rsn_ie or bool(rsn_tokens - ignored) or bool(sec_tokens & {"WPA2", "WPA3"})
         has_wpa1 = self.has_wpa1_ie or bool(wpa_tokens - {"(none)", "--"}) or "WPA1" in sec_tokens
-
         if "WEP" in sec_tokens:
             return "WEP"
         if "OWE" in akms or "OWE" in sec_tokens:

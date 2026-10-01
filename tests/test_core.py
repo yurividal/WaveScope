@@ -287,3 +287,76 @@ def test_nmcli_fallback_owe_transition_open_side():
     # nmcli: RSN-FLAGS "owe" is emitted for both OWE and OWE-TM; SECURITY differs
     assert _ap(security="OWE-TM", rsn_flags="pair_ccmp group_ccmp owe").security_short == "Open (OWE transition)"
     assert _ap(security="OWE", rsn_flags="pair_ccmp group_ccmp owe").security_short == "OWE"
+
+
+# ── 2.1.1 remaining spec-review items ────────────────────────────────────────
+
+
+def test_rnr_bss_params_offsets_per_length():
+    # len 8: offset, BSSID, params (params at 7); len 12: params at 11; len 5: short SSID only
+    hdr = lambda count, length: bytes([((count - 1) << 4), length])  # noqa: E731
+    e8 = hdr(1, 8) + bytes([134, 37]) + bytes([0]) + bytes.fromhex("aabbccddee01") + bytes([0x42])
+    e12 = hdr(1, 12) + bytes([134, 37]) + bytes([0]) + bytes.fromhex("aabbccddee02") + b"\x00\x00\x00\x00" + bytes([0x02])
+    e5 = hdr(1, 5) + bytes([81, 6]) + bytes([0]) + b"\x11\x22\x33\x44"
+    entries = sc._parse_rnr(e8 + e12 + e5)
+    assert [e["bssid"] for e in entries] == ["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"]
+    assert entries[0]["same_ssid"] is True and entries[0]["colocated"] is True  # 0x42 = bits 1 and 6
+    assert entries[1]["same_ssid"] is True and entries[1]["colocated"] is False
+
+
+def test_vht_80p80_mirrors_hostap_and_places_primary_segment():
+    blk = (
+        f"BSS 00:11:22:33:44:55(on wlan0)\n{T}freq: 5180.0\n{T}VHT capabilities:\n"
+        f"{T}VHT operation:\n{T}{T} * channel width: 1 (80 MHz)\n"
+        f"{T}{T} * center freq segment 1: 42\n{T}{T} * center freq segment 2: 155\n"
+    )
+    d = parse_iw_scan(blk)["00:11:22:33:44:55"]
+    assert (d["iw_oper_bw"], d["iw_center_freq"], d["iw_80p80"], d["iw_center_freq2"]) == (80, 5210, True, 5775)
+    # CCFS1 16 away is not contiguous either (hostap: any non-8 CCFS1 → 80+80)
+    d2 = parse_iw_scan(blk.replace("segment 2: 155", "segment 2: 58"))["00:11:22:33:44:55"]
+    assert d2["iw_80p80"] and d2["iw_oper_bw"] == 80
+
+
+def test_he_160_rate_uses_160_mcs_set():
+    blk = (
+        f"BSS 00:11:22:33:44:55(on wlan0)\n{T}freq: 5500.0\n{T}HT capabilities:\n{T}VHT capabilities:\n"
+        f"{T}VHT operation:\n{T}{T} * channel width: 1 (80 MHz)\n"
+        f"{T}{T} * center freq segment 1: 106\n{T}{T} * center freq segment 2: 114\n"
+        f"{T}HE capabilities:\n{T}{T}HE PHY Capabilities: (0x00):\n{T}{T}{T}HE160/5GHz\n"
+        f"{T}{T}HE RX MCS and NSS set <= 80 MHz\n{T}{T}{T}1 streams: MCS 0-11\n{T}{T}{T}2 streams: MCS 0-11\n"
+        f"{T}{T}{T}3 streams: MCS 0-11\n{T}{T}{T}4 streams: MCS 0-11\n"
+        f"{T}{T}HE TX MCS and NSS set <= 80 MHz\n{T}{T}{T}1 streams: MCS 0-11\n"
+        f"{T}{T}HE RX MCS and NSS set 160 MHz\n{T}{T}{T}1 streams: MCS 0-11\n{T}{T}{T}2 streams: MCS 0-11\n"
+        f"{T}{T}{T}3 streams: not supported\n"
+        f"{T}{T}HE TX MCS and NSS set 160 MHz\n{T}{T}{T}1 streams: MCS 0-11\n"
+    )
+    d = parse_iw_scan(blk)["00:11:22:33:44:55"]
+    assert d["iw_oper_bw"] == 160 and d["iw_max_nss"] == 2
+    assert round(sc._best_rate_mbps("HE", 160, d["_rate_pairs"][1])) == 2402  # 2 SS, not 4
+
+
+def test_pmf_na_without_rsn_and_rrm_exact_line():
+    blk = (
+        f"BSS 00:11:22:33:44:55(on wlan0)\n{T}freq: 2437.0\n{T}capability: ESS (0x0001)\n"
+        f"{T}RM enabled capabilities:\n{T}{T}Capabilities: 0x00 0x00 0x00 0x10 0x00\n"
+        f"{T}{T}{T}Neighbor Report TSF Offset\n"
+    )
+    d = parse_iw_scan(blk)["00:11:22:33:44:55"]
+    assert d["pmf"] == "N/A" and d["rrm"] is False
+
+
+def test_wpa3_override_marker_and_6ghz_checks():
+    from wavescope_app.issues import detect_issues
+
+    a = _ap(security="WPA2", rsn_flags="pair_ccmp psk", akm_suites=("PSK",), has_rsn_ie=True, pmf="Optional",
+            rsn_override_akm="SAE-EXT-KEY")
+    assert a.security_short == "WPA2 (PSK) (+WPA3 override)"
+    six_trans = _ap(bssid="84:78:48:EA:44:D7", freq_mhz=6135, channel=37, security="WPA2 WPA3",
+                    rsn_flags="psk sae", akm_suites=("PSK", "SAE"), has_rsn_ie=True, pmf="Optional", iw_seen=True)
+    checks = {i.check for i in detect_issues([six_trans])}
+    assert "six_ghz_security" in checks
+    sae_opt = _ap(akm_suites=("SAE",), has_rsn_ie=True, pmf="Optional", security="WPA3", rsn_flags="sae")
+    assert "sae_without_pmf" in {i.check for i in detect_issues([sae_opt])}
+    ok6 = _ap(bssid="84:78:48:EA:44:D7", freq_mhz=6135, channel=37, security="WPA3", rsn_flags="sae",
+              akm_suites=("SAE",), has_rsn_ie=True, pmf="Required", iw_seen=True)
+    assert "six_ghz_security" not in {i.check for i in detect_issues([ok6])}

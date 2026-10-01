@@ -64,6 +64,12 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="2.1.1" date="2026-10-01">
+      <description>
+        <p>Data-accuracy fixes from an 802.11 spec review: legacy rates, HT rates, country power limits, group management cipher, TPC sign, OWE transition labels, Suite-B naming, Reduced Neighbor Report flags, 80+80 MHz placement, 160 MHz rates and stricter 6 GHz / PMF checks; the Wireshark cross-check covers these fields now.</p>
+      </description>
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v2.1.1</url>
+    </release>
     <release version="2.1.0" date="2026-10-01">
       <description>
         <p>Kernel scan cache via iw as the single data source (verified against Wireshark), an Issues tab with configuration checks, side-by-side Compare, BSSID labels, column profiles with pinned columns, a Find AP beeper, saved sessions and CSV export, and a Settings dialog.</p>

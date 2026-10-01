@@ -484,6 +484,10 @@ def _re_int(pattern: str, text: str, flags: int = re.IGNORECASE) -> Optional[int
     return int(m.group(1)) if m else None
 
 
+# TBTT Information length → offset of the BSS Parameters octet (see _parse_rnr)
+_RNR_PARAMS_OFFSET: Dict[int, int] = {2: 1, 6: 5, 8: 7, 9: 7, 12: 11, 13: 11}
+
+
 def _parse_rnr(raw: bytes) -> List[Dict[str, object]]:
     """Parse a Reduced Neighbor Report element body (IE 201).
 
@@ -492,9 +496,16 @@ def _parse_rnr(raw: bytes) -> List[Dict[str, object]]:
         TBTT Information Header (2 octets):
           B0-1 field type · B2 filtered · B4-7 count-1 · B8-15 info length
         Operating Class (1) · Channel Number (1)
-        TBTT Information Set: (count) × (info length) octets, where
-          octet 0 = TBTT offset, 1-6 = BSSID (length ≥ 7),
-          7-10 = Short SSID (length ≥ 11), 11 = BSS Parameters (length ≥ 12)
+        TBTT Information Set: (count) × (info length) octets.  The field
+        layout depends on the length (802.11ax Table 9-281; Wireshark
+        packet-ieee80211.c tbtt_info_length):
+           1: offset                       2: offset, params
+           5: offset, short SSID           6: offset, short SSID, params
+           7: offset, BSSID                8: offset, BSSID, params
+           9: offset, BSSID, params, PSD  11: offset, BSSID, short SSID
+          12: offset, BSSID, short SSID, params
+          13: 12 + PSD                    16+: 13 + MLD parameters
+        Lengths 0, 3, 4, 10, 14, 15 are reserved and carry no known fields.
     """
     out: List[Dict[str, object]] = []
     pos = 0
@@ -502,18 +513,24 @@ def _parse_rnr(raw: bytes) -> List[Dict[str, object]]:
         hdr0, info_len, op_class, channel = raw[pos], raw[pos + 1], raw[pos + 2], raw[pos + 3]
         count = ((hdr0 >> 4) & 0x0F) + 1
         pos += 4
+        if info_len == 0:
+            return out  # cannot advance
+        params_off = _RNR_PARAMS_OFFSET.get(info_len, 11 if info_len >= 16 else None)
+        has_bssid = info_len in (7, 8, 9, 11, 12, 13) or info_len >= 16
         for _ in range(count):
-            if info_len == 0 or pos + info_len > len(raw):
+            if pos + info_len > len(raw):
                 return out
             info = raw[pos:pos + info_len]
             pos += info_len
+            if not has_bssid and params_off is None:
+                continue  # short-SSID-only or reserved layout: nothing we use
             entry: Dict[str, object] = {"op_class": op_class, "channel": channel}
-            if info_len >= 7:
+            if has_bssid:
                 entry["bssid"] = ":".join(f"{b:02x}" for b in info[1:7])
-            if info_len >= 12:
-                params = info[11]
-                entry["same_ssid"] = bool(params & 0x02)
-                entry["colocated"] = bool(params & 0x40)
+            if params_off is not None:
+                params = info[params_off]
+                entry["same_ssid"] = bool(params & 0x02)  # RNR_BSS_PARAM_SAME_SSID
+                entry["colocated"] = bool(params & 0x40)  # RNR_BSS_PARAM_CO_LOCATED
             out.append(entry)
     return out
 
@@ -747,7 +764,14 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             ]
             return pairs
 
-        he_pairs = _mcs_nss(he_caps.split("HE TX")[0]) if has_he else []
+        # iw prints one RX set per bandwidth class ("<= 80 MHz", "160 MHz",
+        # "80+80 MHz"); APs often support fewer streams at 160 MHz, so the
+        # set matching the operating width is chosen once that is known.
+        he_rx_sets: Dict[str, List[Tuple[int, int]]] = {}
+        if has_he:
+            for m_set in re.finditer(r"HE RX MCS and NSS set (<= 80|160|80\+80) MHz\n((?:.*\n)*?)(?=\s*HE (?:RX|TX) MCS|\s*PPE|\Z)", he_caps):
+                he_rx_sets[m_set.group(1)] = _mcs_nss(m_set.group(2))
+        he_pairs = he_rx_sets.get("<= 80", [])
         eht_pairs = [
             (int(hi), int(nss))
             for hi, nss in re.findall(r"Rx Max NSS for MCS \d+-(\d+):\s*(\d+)", eht_caps)
@@ -762,6 +786,7 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         d["_rate_pairs"] = (
             ("EHT", eht_pairs) if eht_pairs else ("HE", he_pairs) if he_pairs else ("", [])
         )
+        d["_he_rx_sets"] = he_rx_sets
 
         # ── HE Operation: BSS color, TWT, 6 GHz operation info ───────────
         he_op = _first(ies, "HE Operation")
@@ -839,7 +864,10 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
                 if he6_ccfs1 and he6_ccfs0 and abs(he6_ccfs1 - he6_ccfs0) == 8:
                     center_idx = he6_ccfs1
                 elif he6_ccfs1:
-                    non_contiguous = True  # 80+80
+                    # 80+80: draw the 80 MHz segment holding the primary;
+                    # the second segment is kept separately.
+                    oper_bw, center_idx, non_contiguous = 80, he6_ccfs0, True
+                    d["iw_center_freq2"] = chan_index_to_freq(he6_ccfs1, band)
                 else:
                     center_idx = he6_ccfs0
         elif vht_valid and "VHT operation" in ies:
@@ -849,17 +877,22 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             seg1 = _re_int(r"center freq segment 2:\s*(\d+)", vht_op)  # iw's "2" = CCFS1
             # 802.11-2016 Table 9-252: width 1 covers 80, 160 and 80+80
             # (CCFS1 decides); widths 2/3 are the deprecated 160 / 80+80.
+            # hostap get_vht_operation_channel_width: CCFS1 set and 8 from
+            # CCFS0 → 160; any other non-zero CCFS1 → 80+80; else 80.
             if code == 1:
                 if seg1 and seg0 and abs(seg1 - seg0) == 8:
                     oper_bw, center_idx = 160, seg1
-                elif seg1 and seg0 and abs(seg1 - seg0) > 16:
-                    oper_bw, non_contiguous = 160, True
+                elif seg1:
+                    oper_bw, center_idx, non_contiguous = 80, seg0, True
+                    d["iw_center_freq2"] = chan_index_to_freq(seg1, band)
                 else:
                     oper_bw, center_idx = 80, seg0
             elif code == 2:
                 oper_bw, center_idx = 160, seg0
             elif code == 3:
-                oper_bw, non_contiguous = 160, True
+                oper_bw, center_idx, non_contiguous = 80, seg0, True
+                if seg1:
+                    d["iw_center_freq2"] = chan_index_to_freq(seg1, band)
         if oper_bw is None and "HT operation" in ies:
             ht_op = _first(ies, "HT operation")
             sec = re.search(r"secondary channel offset:\s*(\w+)", ht_op)
@@ -874,6 +907,11 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             d["iw_oper_bw"] = oper_bw
         if non_contiguous:
             d["iw_80p80"] = True
+        # HE rate at 160 MHz uses the 160 MHz MCS/NSS set when advertised
+        if oper_bw == 160 and he_rx_sets.get("160") and d["_rate_pairs"][0] == "HE":
+            d["_rate_pairs"] = ("HE", he_rx_sets["160"])
+            d["iw_max_nss"] = max(n for _, n in he_rx_sets["160"])
+            d["iw_max_mcs"] = max(m for m, _ in he_rx_sets["160"])
         if center_idx and "iw_center_freq" not in d:
             cf = chan_index_to_freq(center_idx, band)
             if cf:
@@ -906,8 +944,10 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             if decoded_caps:
                 d["rsn_capabilities"] = decoded_caps
             d["pmf"] = _pmf_from_rsn_caps(caps_m.group(1))
+        elif rsn:
+            d["pmf"] = "No"  # RSNE present without the optional Capabilities field = 0
         else:
-            d["pmf"] = "No"
+            d["pmf"] = "N/A"  # Open / WEP / WPA1-only: PMF is an RSN feature
         d["has_wpa1_ie"] = bool(wpa)
         d["has_rsn_ie"] = bool(rsn)
         for prefix, sec_text in (("rsn", rsn), ("wpa", wpa)):
@@ -1015,8 +1055,11 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         parse_vendor_ies(text, d)
 
         # ── 802.11k / 802.11v ────────────────────────────────────────────
-        d["rrm"] = "Neighbor Report" in _first(ies, "RM enabled capabilities")
+        # Exact line: bit 28 prints as "Neighbor Report TSF Offset" (iw scan.c)
+        d["rrm"] = bool(re.search(r"(?m)^\s*Neighbor Report\s*$", _first(ies, "RM enabled capabilities")))
         d["btm"] = "BSS Transition" in ext_caps
+        d["_has_rm_ie"] = "RM enabled capabilities" in ies
+        d["_has_extcap_ie"] = "Extended capabilities" in ies
 
         # ── Country (802.11d) ────────────────────────────────────────────
         if "Country" in ies:
@@ -1364,6 +1407,7 @@ _IW_COPY_FIELDS = (
     "country_env",
     "country_power",
     "iw_center_freq",
+    "iw_center_freq2",
     "iw_80p80",
     "beacon_interval_tu",
     "dtim_period",
