@@ -260,6 +260,25 @@ def test_country_summary_6ghz_and_contiguity():
     assert sc._summarise_country(text5, "5 GHz")[2] == "ch 36–64: 30 dBm; ch 149–165: 30 dBm; ch 100–144: 24 dBm"
     text24 = f" DE{T}Environment: Indoor/Outdoor\n{T}{T}Channels [1 - 11] @ 20 dBm\n{T}{T}Channels [12 - 13] @ 20 dBm\n"
     assert sc._summarise_country(text24, "2.4 GHz")[2] == "ch 1–13: 20 dBm"
+    # Inside an 80 MHz operating class (133) channels are 16 numbers apart (9.4.2.7)
+    text80 = (
+        f" US{T}Environment: bogus\n"
+        f"{T}{T}Extension ID: 201 Regulatory Class: 133 Coverage class: 0 (up to 0m)\n"
+        f"{T}{T}Channels [1 - 6] @ 24 dBm\n"  # iw: first 1, n = 6
+    )
+    assert sc._summarise_country(text80, "6 GHz")[2] == "ch 1–81: 24 dBm"
+
+
+def test_6ghz_ap_power_type_table_e13():
+    blk = (
+        f"BSS 00:11:22:33:44:55(on wlan0)\n{T}freq: 6135.0\n{T}HE capabilities:\n{T}HE Operation:\n"
+        f"{T}{T}6 GHz Operation Information: 0x2543070f00\n{T}{T}{T}Primary Channel: 37\n"
+        f"{T}{T}{T}Channel Width: 80 MHz\n{T}{T}{T}Regulatory Info: 8\n"
+        f"{T}{T}{T}Center Frequency Segment 0: 39\n{T}{T}{T}Center Frequency Segment 1: 0\n"
+    )
+    assert parse_iw_scan(blk)["00:11:22:33:44:55"]["he_6ghz_ap_type"] == "Indoor Standard Power"
+    assert parse_iw_scan(blk.replace("Regulatory Info: 8", "Regulatory Info: 7"))["00:11:22:33:44:55"]["he_6ghz_ap_type"] == "AP role not relevant"
+    assert parse_iw_scan(blk.replace("Regulatory Info: 8", "Regulatory Info: 5"))["00:11:22:33:44:55"]["he_6ghz_ap_type"] == "Reserved (5)"
 
 
 def test_group_mgmt_cipher_and_tpc_sign():

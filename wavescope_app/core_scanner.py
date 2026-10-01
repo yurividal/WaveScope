@@ -411,14 +411,19 @@ _RSNX_BITS: Dict[int, str] = {
     21: "SSID protection",
 }
 
-# 6 GHz HE Operation "Regulatory Info" → AP power type
-# (IEEE 802.11-2024 Table E-12, mirrored by hostap enum he_reg_info_6ghz_ap_type).
+# 6 GHz HE Operation "Regulatory Info" (Control field B3-B6, 4 bits —
+# IEEE 802.11-2024 Figure 9-908) → AP power type per Table E-13 (the
+# extended interpretation, which the 4-bit encoding is defined for).  Legacy
+# STAs read only 3 bits (Table E-12, "value or value+8"); value 4 is the
+# deprecated 3-bit encoding of "indoor standard power", now value 8.
 _6GHZ_AP_TYPES: Dict[int, str] = {
     0: "Indoor (LPI)",
     1: "Standard Power (SP)",
     2: "Very Low Power (VLP)",
     3: "Indoor Enabled",
-    4: "Indoor Standard Power",
+    4: "Indoor Standard Power (deprecated encoding)",
+    7: "AP role not relevant",
+    8: "Indoor Standard Power",
 }
 
 # 6 GHz operating classes (802.11ax Annex E Table E-4) used by the RNR parser.
@@ -561,28 +566,41 @@ def _parse_rates(section_texts: List[str]) -> Tuple[List[float], List[float]]:
     return rates, basic
 
 
-# 6 GHz operating classes (802.11ax Annex E Table E-4): 131-135 20-160 MHz,
-# 136 ch 2, 137 320 MHz.  A Regulatory Class line with one of these means the
-# following sub-band triplets are 6 GHz channels.
+# Global operating classes (IEEE 802.11-2024 Annex E Table E-4) → BSS
+# bandwidth in MHz.  Inside an Operating/Subband Sequence of the Country
+# element, "the channel numbers that are included in a group of channels are
+# separated by the BSS bandwidth" of that class (9.4.2.7); outside one, by
+# 20 MHz.  Classes 131-137 are the 6 GHz band.
+_OP_CLASS_BW: Dict[int, int] = {
+    **{c: 20 for c in (115, 118, 121, 124, 125, 131, 136)},
+    **{c: 40 for c in (116, 117, 119, 120, 122, 123, 126, 127, 132)},
+    **{c: 80 for c in (128, 130, 133, 135)},
+    **{c: 160 for c in (129, 134)},
+    137: 320,
+}
 _6GHZ_REG_CLASSES = frozenset(range(131, 138))
 
 
 def _summarise_country(text: str, bss_band: str = "") -> Tuple[str, str, str]:
     """(country code, environment, power-limit summary) from the Country IE.
 
-    Environment: iw prints the Country String's third octet as "Indoor only"
-    / "Outdoor only" / "Indoor/Outdoor" and everything else as "bogus".  A
-    Country element that carries Table E-4 operating triplets sets that
-    octet to 0x04 (802.11-2020 9.4.2.8 — not verifiable from local sources);
-    every 6 GHz-capable AP does, so "bogus" together with a Regulatory Class
-    line is reported as the global (Table E-4) encoding, not an error.
+    Environment: the Country String's third octet is ' ' (all environments),
+    'O' (outdoor), 'I' (indoor), 'X' (noncountry entity) or the Annex E
+    operating-class table number in use, e.g. 0x04 for Table E-4 (IEEE
+    802.11-2024 Annex C dot11CountryString; E.2.7 gives the 6 GHz US example
+    0x55 0x53 0x04).  iw prints the first three as text and anything else as
+    "bogus"; with a Regulatory Class line present that is the Table E-4 case.
 
-    Triplets: iw computes the end channel of a sub-band triplet as
-    first + (n-1) when first ≤ 14 and first + 4·(n-1) otherwise (iw scan.c
-    print_country).  6 GHz channels start at 1 but are 4 apart, so a 6 GHz
-    triplet starting at ch 1-13 is printed with the wrong end channel (e.g.
-    [1 - 24] for 24 channels = ch 1-93); it is recomputed here when the
-    triplet belongs to a 6 GHz regulatory class (or the BSS itself is 6 GHz).
+    Triplets: iw computes the end channel as first + (n-1) when first ≤ 14
+    and first + 4·(n-1) otherwise (iw scan.c print_country).  Per 9.4.2.7 the
+    channels of a subband group are 5 MHz apart on 2.4 GHz, and otherwise
+    separated by the BSS bandwidth: 20 MHz (4 channel numbers) for plain
+    subband triplets, or the operating class's bandwidth inside an
+    Operating/Subband Sequence.  So a 6 GHz triplet starting at ch 1-13 is
+    printed by iw with the wrong end channel ([1 - 24] for 24 channels =
+    ch 1-93), and wider classes need a wider step; both are recomputed here
+    from the recovered channel count.  Triplets describe only the band the
+    frame was sent on, so the BSS band is the default context.
 
     Adjacent triplets with the same power are merged only when their channel
     ranges are contiguous (step 1 on 2.4 GHz, 4 above), so [36-64]@30 and
@@ -598,21 +616,25 @@ def _summarise_country(text: str, bss_band: str = "") -> Tuple[str, str, str]:
 
     runs: List[List[int]] = []  # [lo, hi, power, step]
     six_ghz = bss_band == "6 GHz"
+    class_bw = 20  # bandwidth of the current Operating/Subband Sequence
     for line in (text or "").splitlines():
         rc = re.search(r"Regulatory Class:\s*(\d+)", line)
         if rc:
-            six_ghz = int(rc.group(1)) in _6GHZ_REG_CLASSES
+            op_class = int(rc.group(1))
+            six_ghz = op_class in _6GHZ_REG_CLASSES
+            class_bw = _OP_CLASS_BW.get(op_class, 20)
             continue
         m = re.search(r"Channels \[(\d+) - (\d+)\] @ (-?\d+) dBm", line)
         if not m:
             continue
         lo, hi, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if six_ghz:
-            if lo <= 14:  # iw used step 1; recover n and apply the 6 GHz step
-                hi = lo + 4 * (hi - lo)
-            step = 4
+        if bss_band == "2.4 GHz" and not six_ghz:
+            step = 1  # 5 MHz spacing on 2.4 GHz regardless of class
         else:
-            step = 1 if lo <= 14 else 4
+            iw_step = 1 if lo <= 14 else 4  # what iw assumed when printing
+            n = (hi - lo) // iw_step + 1  # recover Number of Channels
+            step = max(4, class_bw // 5)  # 20 MHz → 4, 40 → 8, 80 → 16, …
+            hi = lo + step * (n - 1)
         if runs and runs[-1][2] == p and runs[-1][3] == step and lo == runs[-1][1] + step:
             runs[-1][1] = hi
         else:
@@ -822,7 +844,7 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         he6_ccfs1 = _re_int(r"Center Frequency Segment 1:\s*(\d+)", he_op)
         reg_info = _re_int(r"Regulatory Info:\s*(\d+)", he_op)
         if reg_info is not None and band == BAND_6:
-            d["he_6ghz_ap_type"] = _6GHZ_AP_TYPES.get(reg_info, f"Unknown ({reg_info})")
+            d["he_6ghz_ap_type"] = _6GHZ_AP_TYPES.get(reg_info, f"Reserved ({reg_info})")
 
         # ── EHT Operation: width, CCFS, puncturing ───────────────────────
         eht_op = _first(ies, "EHT Operation")

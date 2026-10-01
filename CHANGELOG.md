@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Verified against IEEE Std 802.11-2024 (the three questions the spec review left open)
+- **6 GHz AP power type** — the Regulatory Info subfield is 4 bits (Figure 9-908) and decoded per Table E-13: 0 Indoor, 1 Standard Power, 2 Very Low Power, 3 Indoor Enabled, 7 "AP role not relevant", 8 Indoor Standard Power; 4 is the deprecated 3-bit encoding of Indoor SP; other values are shown as Reserved. Previously only 0-4 were mapped.
+- **Country element** — the Country String's third octet is the Annex E table number in use (0x04 = Table E-4; Annex C and E.2.7), confirming the "Global (Table E-4 operating classes)" label. Channel spacing inside an Operating/Subband Sequence follows the operating class's bandwidth (9.4.2.7), so 40/80/160/320 MHz classes now get the right channel ranges, not just the 20 MHz class.
+- **Mobility Domain ID** — a 2-octet identifier (9.4.2.45); shown as the octets in transmission order (hostapd's `mobility_domain=` form) with the little-endian numeric value (9.2.2) alongside, which is what Wireshark displays.
+- **WPA3 modes** (WPA3 Specification v3.5 §2.2-2.4, §3.2-3.5, §11.2): labels and the 6 GHz / PMF checks match the specification; a WPA2-Enterprise BSS with PMF required is *not* WPA3-Enterprise (which requires AKM 5 and forbids AKM 1), so its "WPA2 (802.1X)" label stands.
+
 ## v2.1.1 — 2026-10-01
 
 ### Fixes — wrong data found in a spec review against iw, hostap, Wireshark and nmcli sources

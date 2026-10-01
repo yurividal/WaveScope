@@ -249,12 +249,15 @@ def _pmf(mfpr: str, mfpc: str) -> Optional[str]:
     return "No"
 
 
+# IEEE 802.11-2024 Table E-13 (4-bit Regulatory Info)
 _AP_TYPES = {
     0: "Indoor (LPI)",
     1: "Standard Power (SP)",
     2: "Very Low Power (VLP)",
     3: "Indoor Enabled",
-    4: "Indoor Standard Power",
+    4: "Indoor Standard Power (deprecated encoding)",
+    7: "AP role not relevant",
+    8: "Indoor Standard Power",
 }
 
 
@@ -301,7 +304,7 @@ def normalize_tshark(rows: List[Dict[str, str]], freq: int) -> Dict[str, object]
     mld = first("wlan.eht.multi_link.common_info.ap_mld_mac_address")
     out["mld_mac"] = mld.lower() or None
     reg = as_int("wlan.ext_tag.he_operation.6ghz.control.regulatory_info")
-    out["ap_power_type"] = _AP_TYPES.get(reg, f"Unknown ({reg})") if reg is not None and _band(freq) == "6" else None
+    out["ap_power_type"] = _AP_TYPES.get(reg, f"Reserved ({reg})") if reg is not None and _band(freq) == "6" else None
     pb = as_int("wlan.eht.eht_operation_information.disabled_subchannel_bitmap")
     out["punct_bitmap"] = pb if pb else None
     out["ssid"] = _tshark_ssid(f.get("wlan.ssid", ""))

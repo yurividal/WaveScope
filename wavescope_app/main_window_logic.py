@@ -1355,8 +1355,17 @@ class MainWindowLogicMixin:
             v["owe_pair"].setText(dim("None"))
         if ap.mobility_domain:
             n = mobility_domain_members(ap, self._aps)
+            # MDID is a 2-octet identifier (IEEE 802.11-2024 9.4.2.45); shown as
+            # the octets in transmission order (hostapd's mobility_domain= form).
+            # Multi-octet fields are sent least-significant octet first (9.2.2),
+            # so Wireshark's numeric reading is the byte-swapped value.
+            try:
+                le_val = int.from_bytes(bytes.fromhex(ap.mobility_domain), "little")
+                mdid_txt = f"MDID {ap.mobility_domain}  {dim(f'(= 0x{le_val:04X} as a number)')}"
+            except ValueError:
+                mdid_txt = f"MDID {ap.mobility_domain}"
             v["mobility_domain"].setText(
-                f"MDID {ap.mobility_domain}"
+                mdid_txt
                 + (" · FT over DS" if ap.ft_over_ds else " · FT over the air")
                 + f"  {dim(f'({n} BSSID(s) of this SSID share it)')}"
             )
