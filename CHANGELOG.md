@@ -11,7 +11,7 @@
 - **Beacon-only IEs** — iw's `scan dump -u` prints just the first IE set; WaveScope now also reads `scan dump -b` (iw accepts only one option at a time) to pick up beacon-only elements such as TIM/DTIM.
 
 ### Changes
-- **6 GHz PSC channels shown in bold** on the 6 GHz axis instead of triangle markers on the plot floor (keeps the U-NII colour coding); hovering a channel still says "Preferred Scanning Channel (PSC)".
+- **6 GHz PSC channels emphasized on the axis** — bold, in a vivid shade of their U-NII sub-band colour — instead of triangle markers on the plot floor; hovering a channel still says "Preferred Scanning Channel (PSC)".
 
 ### Verified against Wireshark
 - **`devtools/crosscheck.py`** reads the kernel's raw IE bytes (unprivileged nl80211, via pyroute2), wraps them in synthetic beacons, decodes them with **tshark**, and compares Wireshark's values field by field with WaveScope's parse of the same frames (matched by TSF): SSID, primary channel, operating width and block center (CCFS rules), PMF, AKM suites, BSS color, BSS Load, country, DTIM, 802.11r MDID, MLD MAC, 6 GHz AP power type, EHT puncturing. First live run: 32 BSSs, 0 mismatches.

@@ -149,7 +149,19 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
     """X-axis for the 5 GHz panel — tick labels colour-coded by U-NII sub-band."""
 
     _CHAN_COLORS = _UNII_CHAN_COLORS
-    _BOLD_CHANNELS: frozenset = frozenset()  # channels whose label is drawn bold
+    _BOLD_CHANNELS: frozenset = frozenset()  # channels whose label is emphasized
+
+    @staticmethod
+    def _emphasis_color(hex_c: str) -> QColor:
+        """Same hue as the U-NII colour, but more saturated and deeper.
+
+        The sub-band label colours are light pastels, so lightening them
+        would wash out towards white; a vivid, darker shade of the same
+        hue stands out in both themes while keeping the sub-band coding.
+        """
+        c = QColor(hex_c)
+        h, sat, light, a = c.getHsl()
+        return QColor.fromHsl(h, min(255, sat + 90), max(0, light - 50), a)
     _DRAW_DFS_SEGMENT = True
     _DFS_FREQ_RANGE = (5260.0, 5720.0)  # ch52 .. ch144 centers
 
@@ -194,9 +206,12 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
             except ValueError:
                 ch = None
                 hex_c = _UNII_NAME_COLORS.get(clean_text)
-            # Bold keeps the U-NII colour coding intact (e.g. 6 GHz PSCs).
-            p.setFont(bold_font if ch in self._BOLD_CHANNELS else base_font)
-            p.setPen(pg.mkPen(hex_c) if hex_c else default_pen)
+            emphasized = ch in self._BOLD_CHANNELS
+            p.setFont(bold_font if emphasized else base_font)
+            if hex_c and emphasized:
+                p.setPen(pg.mkPen(self._emphasis_color(hex_c)))
+            else:
+                p.setPen(pg.mkPen(hex_c) if hex_c else default_pen)
             p.drawText(rect, int(flags), text)
         p.restore()
 
@@ -205,7 +220,8 @@ class SixGhzBottomAxisItem(FiveGhzBottomAxisItem):
     """X-axis for the 6 GHz panel — tick labels colour-coded by U-NII sub-band."""
 
     _CHAN_COLORS = _UNII6_CHAN_COLORS
-    # Preferred Scanning Channels are drawn bold; hovering one says "PSC".
+    # Preferred Scanning Channels: bold, in a vivid shade of their U-NII
+    # colour; hovering one says "PSC".
     _BOLD_CHANNELS = PSC_6GHZ_CHANNELS
     _DRAW_DFS_SEGMENT = False
 
