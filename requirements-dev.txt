@@ -1,0 +1,6 @@
+# Development / test dependencies (not needed to run WaveScope).
+#   pip install -r requirements.txt -c constraints.txt -r requirements-dev.txt
+pytest==9.1.1
+# devtools/crosscheck.py only: reads raw IEs from the kernel scan cache over
+# nl80211 (unprivileged) to feed Wireshark/tshark as the reference decoder.
+pyroute2==0.9.6

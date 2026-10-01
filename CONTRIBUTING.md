@@ -75,3 +75,23 @@ from `core_base.py`. Output goes to the repository root.
 Release builds run in `.github/workflows/release.yml` when a `vX.Y.Z` tag is
 pushed. To rebuild an existing tag, run the workflow manually from the Actions
 tab and enter the tag.
+
+## Tests and the Wireshark cross-check
+
+```bash
+pip install -r requirements.txt -c constraints.txt -r requirements-dev.txt
+QT_QPA_PLATFORM=offscreen python3 -m pytest -q tests
+```
+
+`tests/test_parser_vs_wireshark.py` compares WaveScope's parser with
+Wireshark's decoding of the same frames, using stored fixtures. To check
+the parser against live data (needs `iw`, `tshark` and pyroute2; no root):
+
+```bash
+nmcli dev wifi rescan; sleep 8
+python3 devtools/crosscheck.py                      # report only
+python3 devtools/crosscheck.py --save-fixture NAME  # also store an anonymized fixture
+```
+
+Fixtures are anonymized by default (real BSSIDs are location-identifying).
+Never commit a fixture made with `--no-anonymize`.

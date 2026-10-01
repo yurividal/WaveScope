@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased (2.1)
+
+### New data source: the kernel scan cache via iw (single source of truth)
+- **All BSS data now comes from one place** — the kernel's cfg80211 scan results as decoded by `iw` — instead of merging NetworkManager's list (wpa_supplicant's copy, re-interpreted by NM) with iw's. This removes the BSSID matching, the percent-vs-dBm and "0 MHz" reconciliation and the 30 s / 180 s cache-lifetime mismatch behind several earlier bugs.
+- **NetworkManager is only used to trigger scans** (`nmcli dev wifi rescan`, allowed for active sessions by its polkit policy). Without NetworkManager the app still reads whatever the host's own scans leave in the kernel cache.
+- **No root needed**: reading the scan cache, station and survey data is unprivileged (nl80211 GET_SCAN / GET_STATION / GET_SURVEY); only scan *triggering* requires CAP_NET_ADMIN, which is why it is delegated to the network manager.
+- **Tools ▸ Data Source** switches between the new source (default) and the legacy NetworkManager + iw path; the status bar shows which one is active and falls back automatically when iw or a managed Wi-Fi interface is unavailable. The choice is saved.
+- Built entirely from iw: SSID (iw's escaping reversed, UTF-8 safe), connected BSS, security (NM-equivalent tokens, so labels and filters are unchanged), Signal % (NetworkManager's own dBm mapping) and the max PHY rate (EHT/HE/VHT/HT/legacy).
+- **Beacon-only IEs** — iw's `scan dump -u` prints just the first IE set; WaveScope now also reads `scan dump -b` (iw accepts only one option at a time) to pick up beacon-only elements such as TIM/DTIM.
+
+### Verified against Wireshark
+- **`devtools/crosscheck.py`** reads the kernel's raw IE bytes (unprivileged nl80211, via pyroute2), wraps them in synthetic beacons, decodes them with **tshark**, and compares Wireshark's values field by field with WaveScope's parse of the same frames (matched by TSF): SSID, primary channel, operating width and block center (CCFS rules), PMF, AKM suites, BSS color, BSS Load, country, DTIM, 802.11r MDID, MLD MAC, 6 GHz AP power type, EHT puncturing. First live run: 32 BSSs, 0 mismatches.
+- `--save-fixture` stores an **anonymized** fixture (BSSIDs remapped component-wise so AP/radio relationships survive, MACs inside RNR/vendor IEs rewritten, SSIDs replaced, WPS identities and unused raw IEs removed) for **offline regression tests** (`tests/`), now run in CI.
+
 ## v2.0.3 — 2026-10-01
 
 ### Fixes

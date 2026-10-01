@@ -451,10 +451,36 @@ class MainWindowLogicMixin:
         self._scanner = WiFiScanner(
             interval_sec=REFRESH_INTERVALS[self._interval_combo.currentIndex()],
             linger_secs=float(self._linger_spin.value()),
+            source=self._data_source,
         )
         self._scanner.data_ready.connect(self._on_data)
         self._scanner.scan_error.connect(self._on_error)
+        self._scanner.source_active.connect(self._on_source_active)
         self._scanner.start()
+
+    def _on_source_change(self, source: str) -> None:
+        """Switch data source: restart the scanner and drop per-BSS caches,
+        so values from one source never linger into the other."""
+        if source == self._data_source:
+            return
+        self._data_source = source
+        for cache in (self._sticky_cache, self._iw_cache, self._iw_seen_at, self._conn_counter_prev):
+            cache.clear()
+        if self._scanner is not None:  # not paused
+            self._stop_scanner()
+            self._start_scanner()
+        self.statusBar().showMessage("Data source changed — re-scanning…")
+
+    def _on_source_active(self, source: str) -> None:
+        if source == "iw":
+            txt, tip = "  Source: iw  ", "Kernel scan cache via iw"
+        else:
+            txt, tip = "  Source: NetworkManager  ", "NetworkManager + iw (legacy)"
+            if self._data_source == "iw":
+                txt = "  Source: NetworkManager (fallback)  "
+                tip = "iw or a managed Wi-Fi interface is unavailable — using NetworkManager"
+        self._lbl_source.setText(txt)
+        self._lbl_source.setToolTip(tip)
 
     def _stop_scanner(self, wait_ms: Optional[int] = 3000) -> None:
         """Stop the current scanner without ever dropping a running QThread.
@@ -1569,6 +1595,10 @@ class MainWindowLogicMixin:
         if 0 <= idx < self._interval_combo.count():
             self._interval_combo.setCurrentIndex(idx)
         self._linger_spin.setValue(_int("scan/linger_s", self._linger_spin.value()))
+        src = st.value("scan/source", "iw")
+        if src in self._source_actions:
+            self._data_source = src
+            self._source_actions[src].setChecked(True)
         band = st.value("filter/band", "All")
         if isinstance(band, str) and self._band_combo.findText(band) >= 0:
             self._band_combo.setCurrentText(band)
@@ -1603,6 +1633,7 @@ class MainWindowLogicMixin:
         st.setValue("window/sidebar_visible", self._btn_sidebar.isChecked())
         st.setValue("scan/interval_index", self._interval_combo.currentIndex())
         st.setValue("scan/linger_s", self._linger_spin.value())
+        st.setValue("scan/source", self._data_source)
         st.setValue("filter/band", self._band_combo.currentText())
         st.setValue("ui/theme_index", self._theme_combo.currentIndex())
         st.setValue("ui/tab_index", self._tabs.currentIndex())

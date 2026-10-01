@@ -562,6 +562,43 @@ def _summarise_country(text: str) -> Tuple[str, str, str]:
     )
 
 
+def _unescape_iw_ssid(text: str) -> str:
+    """Reverse iw's print_ssid_escaped() (iw util.c).
+
+    iw prints printable ASCII as-is and every other byte — non-printable,
+    non-ASCII (UTF-8), backslash, and a space at either end — as "\\xNN".
+    The escaping is therefore unambiguous: decode \\xNN back to bytes and
+    the result as UTF-8.  A hidden SSID (zero length, or all NUL bytes) → "".
+    """
+    raw = bytearray()
+    i = 0
+    while i < len(text):
+        if text.startswith("\\x", i) and i + 4 <= len(text):
+            try:
+                raw.append(int(text[i + 2:i + 4], 16))
+                i += 4
+                continue
+            except ValueError:
+                pass
+        raw.extend(text[i].encode("utf-8"))
+        i += 1
+    if not raw.strip(b"\x00"):
+        return ""
+    return raw.decode("utf-8", errors="replace")
+
+
+# HT MCS index → per-stream (bits, rate) is MCS % 8 in _MCS_MOD; data
+# subcarriers per width are the same as VHT's (802.11n Table 19-6).
+_HT_SYMBOL_US = {True: 3.6, False: 4.0}  # short GI / long GI
+
+
+def _ht_rate_mbps(bw_mhz: int, max_index: int, sgi: bool) -> float:
+    nss = max_index // 8 + 1
+    bits, rate = _MCS_MOD[max_index % 8]
+    nsd = _VHT_NSD.get(bw_mhz if bw_mhz in (20, 40) else 40, 0)
+    return nsd * bits * rate * nss / _HT_SYMBOL_US[sgi]
+
+
 def parse_iw_scan(output: str) -> Dict[str, dict]:
     """Parse `iw dev <iface> scan dump -u` into {bssid_lower: fields}.
 
@@ -596,6 +633,14 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         bi = _re_int(r"(\d+)\s*TU", _first(meta, "beacon interval"))
         if bi is not None:
             d["beacon_interval_tu"] = bi
+        d["freq_mhz"] = int(round(freq_val)) if freq_val else 0
+        d["associated"] = "-- associated" in lines[0]
+        d["capability_tokens"] = tuple(_first(meta, "capability").split("(")[0].split())
+        if "SSID" in ies:
+            ssid_txt = ies["SSID"][0].split("\n", 1)[0]
+            d["ssid"] = _unescape_iw_ssid(ssid_txt[1:] if ssid_txt.startswith(" ") else ssid_txt)
+        else:
+            d["ssid"] = ""  # zero-length SSID IE (hidden) or none at all
 
         # ── PHY families present ─────────────────────────────────────────
         ht_caps = _first(ies, "HT capabilities")
@@ -821,6 +866,15 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             d["pmf"] = "No"
         d["has_wpa1_ie"] = bool(wpa)
         d["has_rsn_ie"] = bool(rsn)
+        for prefix, sec_text in (("rsn", rsn), ("wpa", wpa)):
+            if not sec_text:
+                continue
+            g = re.search(r"Group cipher:\s*(\S+)", sec_text)
+            pw = re.search(r"Pairwise ciphers:\s*([^\n]*)", sec_text)
+            ak = re.search(r"Authentication suites:\s*([^\n]*)", sec_text)
+            d[f"{prefix}_group_cipher"] = g.group(1) if g else ""
+            d[f"{prefix}_pairwise"] = tuple(pw.group(1).split()) if pw else ()
+            d[f"{prefix}_akm_suites"] = _akm_suites(ak.group(1)) if ak else ()
         grp_mgmt = re.search(r"Group mgmt cipher:\s*(\S+)", rsn)
         if grp_mgmt:
             d["group_mgmt_cipher"] = grp_mgmt.group(1)
@@ -876,6 +930,16 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
 
         # ── Supported rates (legacy/basic rates) ─────────────────────────
         rates, basic = _parse_rates(ies.get("Supported rates", []) + ies.get("Extended supported rates", []))
+        d["max_legacy_rate"] = max(rates) if rates else 0.0
+        ht_idx = re.search(r"HT (?:TX/)?RX MCS rate indexes supported:\s*(?:[\d, -]*?)(\d+)\s*$", ht_caps, re.MULTILINE)
+        if ht_idx and int(ht_idx.group(1)) <= 31:
+            d["ht_max_mcs_index"] = int(ht_idx.group(1))
+            d["ht_sgi"] = bool(re.search(r"RX HT(20|40) SGI", ht_caps))
+        if vht_valid:
+            vht_rx = vht_caps.split("VHT TX MCS set")[0]
+            vpairs = _mcs_nss(vht_rx)
+            if vpairs:
+                d["vht_rate_pairs"] = vpairs
         if rates:
             d["basic_rates"] = " ".join(f"{r:g}" for r in sorted(set(basic))) if basic else ""
             d["has_11b_rates"] = any(r in (1.0, 2.0, 5.5, 11.0) for r in rates)
@@ -1294,31 +1358,63 @@ _CONN_COPY_FIELDS = (
 )
 
 
+def iw_scan_texts(iface: str, stop_event: Optional[threading.Event] = None) -> Tuple[str, str]:
+    """(`scan dump -u` text, `scan dump -b` text) for *iface*.
+
+    iw's dump command takes a single option (iw scan.c handle_scan_dump):
+    `-u` adds undecoded IEs (Cisco IE 133, Mobility Domain, RSNX, RNR,
+    vendor IEs) but prints only the first IE set, usually the probe
+    response; `-b` prints the beacon IE set too, which carries beacon-only
+    elements such as TIM (DTIM period).  Both are read back-to-back.
+    """
+    res_u = run_tool([IW_BIN, "dev", iface, "scan", "dump", "-u"], timeout=6, stop_event=stop_event)
+    if res_u.returncode != 0:
+        res_u = run_tool([IW_BIN, "dev", iface, "scan", "dump"], timeout=6, stop_event=stop_event)
+    res_b = run_tool([IW_BIN, "dev", iface, "scan", "dump", "-b"], timeout=6, stop_event=stop_event)
+    return (
+        res_u.stdout if res_u.returncode == 0 else "",
+        res_b.stdout if res_b.returncode == 0 else "",
+    )
+
+
+def parse_iw_scan_merged(u_text: str, b_text: str = "") -> Dict[str, dict]:
+    """parse_iw_scan() of the `-u` dump, with fields present only in the
+    beacon IE set (from the `-b` dump) filled in where missing."""
+    data = parse_iw_scan(u_text)
+    if b_text:
+        for bssid, extra in parse_iw_scan(b_text).items():
+            base = data.get(bssid)
+            if base is None:
+                continue  # BSS appeared between the two reads; skip it
+            for k, v in extra.items():
+                if k not in base and v not in (None, "", (), []):
+                    base[k] = v
+    return data
+
+
 def _iw_scan_iface(iface: str, stop_event: Optional[threading.Event]) -> Dict[str, dict]:
-    """One `scan dump -u` of *iface* (falls back to plain if -u is rejected)."""
-    res = run_tool([IW_BIN, "dev", iface, "scan", "dump", "-u"], timeout=6, stop_event=stop_event)
-    if res.returncode != 0:
-        res = run_tool([IW_BIN, "dev", iface, "scan", "dump"], timeout=6, stop_event=stop_event)
-        if res.returncode != 0:
-            return {}
-    data = parse_iw_scan(res.stdout)
+    """Decoded scan cache of *iface* (both IE sets merged)."""
+    u_text, b_text = iw_scan_texts(iface, stop_event)
+    if not u_text:
+        return {}
+    data = parse_iw_scan_merged(u_text, b_text)
     for d in data.values():
         d["iw_iface"] = iface
     return data
 
 
-def enrich_with_iw(
-    aps: List[AccessPoint],
-    survey_tracker: Optional[SurveyTracker] = None,
-    stop_event: Optional[threading.Event] = None,
-) -> None:
-    """Run `iw scan dump` on every managed interface and merge into *aps*."""
-    ifaces = _detect_wifi_ifaces()
-    if not ifaces:
-        return
+def _collect_iw(
+    survey_tracker: Optional[SurveyTracker],
+    stop_event: Optional[threading.Event],
+) -> Tuple[Dict[str, dict], Dict[str, Dict[str, object]]]:
+    """`scan dump -u` + connected-link telemetry for every managed interface.
+
+    Returns ({bssid_lower: iw fields}, {connected bssid_lower: link fields}).
+    A BSS heard by two radios keeps the stronger observation.
+    """
     iw_data: Dict[str, dict] = {}
     conn_by_bssid: Dict[str, Dict[str, object]] = {}
-    for iface in ifaces:
+    for iface in _detect_wifi_ifaces():
         try:
             scan = _iw_scan_iface(iface, stop_event)
         except ScanCancelled:
@@ -1327,7 +1423,6 @@ def enrich_with_iw(
             scan = {}
         for bssid, d in scan.items():
             prev = iw_data.get(bssid)
-            # Same BSS heard by two radios: keep the stronger observation.
             if prev is None or d.get("dbm_exact", -999) > prev.get("dbm_exact", -999):
                 iw_data[bssid] = d
         try:
@@ -1338,55 +1433,144 @@ def enrich_with_iw(
             conn = {}
         if conn.get("conn_bssid"):
             conn_by_bssid[str(conn["conn_bssid"]).lower()] = conn
+    return iw_data, conn_by_bssid
 
-    for ap in aps:
-        d = iw_data.get(ap.bssid.lower(), {})
-        for attr in _IW_COPY_FIELDS:
-            if attr in d:
-                setattr(ap, attr, d[attr])
-        if "iw_iface" in d:
-            ap.iw_iface = d["iw_iface"]
 
-        # Prefer WPS-advertised manufacturer when OUI lookup is missing
-        # or when BSSID is locally-administered (common synthetic radio MAC).
-        wps_vendor = d.get("wps_manufacturer", "")
-        if wps_vendor:
-            use_wps = not ap.manufacturer or ap.manufacturer_source.startswith("OUI suffix")
-            try:
-                if int(ap.bssid[:2], 16) & 0x02:
-                    use_wps = True
-            except ValueError:
-                pass
-            if use_wps:
-                ap.manufacturer = wps_vendor
-                ap.manufacturer_source = "WPS / vendor IE (iw scan)"
+def _apply_iw_fields(ap: AccessPoint, d: dict, conn: Optional[Dict[str, object]]) -> None:
+    """Copy one BSS's decoded iw fields (and link telemetry) onto *ap*."""
+    for attr in _IW_COPY_FIELDS:
+        if attr in d:
+            setattr(ap, attr, d[attr])
+    if "iw_iface" in d:
+        ap.iw_iface = d["iw_iface"]
 
-        # ── Operating width: prefer the decoded Operation element ────────
-        # nmcli derives BANDWIDTH from the same IEs but reports 0 for some
-        # 6 GHz BSSs and misreads proprietary 2.4 GHz VHT; the element
-        # decoded above follows the standard exactly.
-        iw_bw = d.get("iw_oper_bw", 0)
-        if iw_bw:
-            ap.bandwidth_mhz = iw_bw
-        elif ap.bandwidth_mhz == 0 and d.get("iw_cap_max_bw", 0) >= 20:
-            ap.bandwidth_mhz = d["iw_cap_max_bw"]
+    # Prefer WPS-advertised manufacturer when OUI lookup is missing
+    # or when BSSID is locally-administered (common synthetic radio MAC).
+    wps_vendor = d.get("wps_manufacturer", "")
+    if wps_vendor:
+        use_wps = not ap.manufacturer or ap.manufacturer_source.startswith("OUI suffix")
+        try:
+            if int(ap.bssid[:2], 16) & 0x02:
+                use_wps = True
+        except ValueError:
+            pass
+        if use_wps:
+            ap.manufacturer = wps_vendor
+            ap.manufacturer_source = "WPS / vendor IE (iw scan)"
 
-        # ── Theoretical max PHY rate when nmcli reports 0 Mbit/s ─────────
-        # 6 GHz beacons carry no legacy Supported Rates IE, so nmcli shows 0.
-        family, pairs = d.get("_rate_pairs", ("", []))
-        if ap.rate_mbps == 0 and ap.bandwidth_mhz > 0 and pairs:
-            ap.rate_mbps = float(int(round(_best_rate_mbps(family, ap.bandwidth_mhz, pairs))))
+    # ── Operating width: prefer the decoded Operation element ────────────
+    # nmcli derives BANDWIDTH from the same IEs but reports 0 for some
+    # 6 GHz BSSs and misreads proprietary 2.4 GHz VHT; the element decoded
+    # by parse_iw_scan follows the standard exactly.
+    iw_bw = d.get("iw_oper_bw", 0)
+    if iw_bw:
+        ap.bandwidth_mhz = iw_bw
+    elif ap.bandwidth_mhz == 0 and d.get("iw_cap_max_bw", 0) >= 20:
+        ap.bandwidth_mhz = d["iw_cap_max_bw"]
 
-        conn = conn_by_bssid.get(ap.bssid.lower())
-        if conn:
-            for attr in _CONN_COPY_FIELDS:
-                if attr in conn:
-                    setattr(ap, attr, conn[attr])
-            if ap.dtim_period is None and conn.get("conn_dtim_period") is not None:
-                ap.dtim_period = int(conn["conn_dtim_period"])
-            if ap.dbm_exact is None and conn.get("conn_link_signal_dbm") is not None:
-                ap.dbm_exact = float(conn["conn_link_signal_dbm"])
+    # ── Theoretical max PHY rate when the source reports 0 Mbit/s ────────
+    if ap.rate_mbps == 0 and ap.bandwidth_mhz > 0:
+        ap.rate_mbps = _max_phy_rate(d, ap.bandwidth_mhz)
 
+    if conn:
+        for attr in _CONN_COPY_FIELDS:
+            if attr in conn:
+                setattr(ap, attr, conn[attr])
+        if ap.dtim_period is None and conn.get("conn_dtim_period") is not None:
+            ap.dtim_period = int(conn["conn_dtim_period"])
+        if ap.dbm_exact is None and conn.get("conn_link_signal_dbm") is not None:
+            ap.dbm_exact = float(conn["conn_link_signal_dbm"])
+
+
+def _max_phy_rate(d: dict, bw_mhz: int) -> float:
+    """Highest advertised PHY rate: EHT/HE, else VHT, else HT, else legacy."""
+    family, pairs = d.get("_rate_pairs", ("", []))
+    if pairs:
+        return float(int(round(_best_rate_mbps(family, bw_mhz, pairs))))
+    if d.get("vht_rate_pairs"):
+        return float(int(round(_best_rate_mbps("VHT", min(bw_mhz, 160), d["vht_rate_pairs"]))))
+    if d.get("ht_max_mcs_index") is not None:
+        return float(int(round(_ht_rate_mbps(min(bw_mhz, 40), d["ht_max_mcs_index"], d.get("ht_sgi", False)))))
+    return float(d.get("max_legacy_rate", 0.0))
+
+
+def _nm_flag_tokens(pairwise: Tuple[str, ...], group: str, akms: Tuple[str, ...]) -> str:
+    """nmcli-style WPA/RSN flag string (devices.c ap_wpa_rsn_flags_to_string)."""
+    def cipher(c: str) -> str:
+        return c.lower().replace("-", "")
+
+    tokens = [f"pair_{cipher(c)}" for c in pairwise]
+    if group:
+        tokens.append(f"group_{cipher(group)}")
+    s = set(akms)
+    if s & {"PSK", "FT/PSK", "PSK/SHA-256", "PSK/SHA-384", "FT/PSK/SHA-384"}:
+        tokens.append("psk")
+    if s & {"802.1X", "FT/802.1X", "802.1X/SHA-256", "FT/802.1X/SHA-384"}:
+        tokens.append("802.1X")
+    if s & {"SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY"}:
+        tokens.append("sae")
+    if "802.1X/SUITE-B-192" in s:
+        tokens.append("wpa-eap-suite-b-192")
+    if "OWE" in s:
+        tokens.append("owe")
+    return " ".join(tokens) if tokens else "(none)"
+
+
+def _ap_from_iw(d: dict) -> Optional[AccessPoint]:
+    """Build an AccessPoint purely from parse_iw_scan() fields (iw data source)."""
+    bssid = d.get("bssid", "")
+    freq = int(d.get("freq_mhz", 0))
+    if not bssid or not freq:
+        return None
+    dbm = d.get("dbm_exact")
+    caps = set(d.get("capability_tokens", ()))
+    rsn_akms = tuple(d.get("rsn_akm_suites", ()))
+    wpa_akms = tuple(d.get("wpa_akm_suites", ()))
+    all_akms = set(rsn_akms) | set(wpa_akms)
+
+    # nmcli-equivalent SECURITY tokens, so labels/filters behave identically
+    sec: List[str] = []
+    if "Privacy" in caps and not d.get("has_rsn_ie") and not d.get("has_wpa1_ie"):
+        sec.append("WEP")
+    if d.get("has_wpa1_ie"):
+        sec.append("WPA1")
+    if all_akms & {"PSK", "FT/PSK", "PSK/SHA-256", "802.1X", "FT/802.1X", "802.1X/SHA-256"} and d.get("has_rsn_ie"):
+        sec.append("WPA2")
+    if all_akms & {"SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY"}:
+        sec.append("WPA3")
+    if "OWE" in all_akms:
+        sec.append("OWE")
+    elif d.get("owe_transition_bssid") and not d.get("has_rsn_ie"):
+        sec.append("OWE-TM")
+    if all_akms & {"802.1X", "FT/802.1X", "802.1X/SHA-256", "FT/802.1X/SHA-384"}:
+        sec.append("802.1X")
+    if "802.1X/SUITE-B-192" in all_akms:
+        sec.append("WPA-EAP-SUITE-B-192")
+
+    ap = AccessPoint(
+        ssid=d.get("ssid", ""),
+        bssid=bssid.upper(),
+        mode="Ad-Hoc" if "IBSS" in caps else "Infra",
+        channel=freq_to_chan(freq),
+        freq_mhz=freq,
+        rate_mbps=0.0,
+        signal=dbm_to_nm_quality(dbm) if dbm is not None else 0,
+        security=" ".join(sec),
+        wpa_flags=_nm_flag_tokens(d.get("wpa_pairwise", ()), d.get("wpa_group_cipher", ""), wpa_akms)
+        if d.get("has_wpa1_ie")
+        else "(none)",
+        rsn_flags=_nm_flag_tokens(d.get("rsn_pairwise", ()), d.get("rsn_group_cipher", ""), rsn_akms)
+        if d.get("has_rsn_ie")
+        else "(none)",
+        bandwidth_mhz=int(d.get("iw_oper_bw", 0) or 20),
+        in_use=bool(d.get("associated")),
+        nm_device=str(d.get("iw_iface", "")),
+    )
+    return ap
+
+
+def _post_process(aps: List[AccessPoint]) -> None:
+    """Cross-BSS steps shared by both data sources."""
     _inherit_radio_params(aps)
 
     # ── Frequency-based wifi_gen fallback ─────────────────────────────────
@@ -1430,6 +1614,41 @@ def enrich_with_iw(
                     ap.manufacturer_source = "LAA sibling OUI"
         except ValueError:
             pass
+
+
+def enrich_with_iw(
+    aps: List[AccessPoint],
+    survey_tracker: Optional[SurveyTracker] = None,
+    stop_event: Optional[threading.Event] = None,
+) -> None:
+    """Legacy data source: merge iw data into nmcli-built AccessPoints."""
+    iw_data, conn_by_bssid = _collect_iw(survey_tracker, stop_event)
+    for ap in aps:
+        key = ap.bssid.lower()
+        _apply_iw_fields(ap, iw_data.get(key, {}), conn_by_bssid.get(key))
+    _post_process(aps)
+
+
+def scan_from_iw(
+    survey_tracker: Optional[SurveyTracker] = None,
+    stop_event: Optional[threading.Event] = None,
+) -> List[AccessPoint]:
+    """iw data source: every AccessPoint comes from the kernel scan cache.
+
+    One source of truth — the kernel's cfg80211 BSS table as printed by iw —
+    instead of merging nmcli's (wpa_supplicant-derived) view with iw's.
+    """
+    iw_data, conn_by_bssid = _collect_iw(survey_tracker, stop_event)
+    aps: List[AccessPoint] = []
+    for bssid, d in iw_data.items():
+        d = dict(d, bssid=bssid)
+        ap = _ap_from_iw(d)
+        if ap is None:
+            continue
+        _apply_iw_fields(ap, d, conn_by_bssid.get(bssid))
+        aps.append(ap)
+    _post_process(aps)
+    return aps
 
 
 # Radio-level fields: identical for every virtual BSS of one radio, so a BSS
@@ -1513,13 +1732,19 @@ class WiFiScanner(QThread):
 
     data_ready = pyqtSignal(list)  # list[AccessPoint]
     scan_error = pyqtSignal(str)
+    source_active = pyqtSignal(str)  # data source actually used this cycle
+
+    # Data sources
+    SOURCE_IW = "iw"  # kernel scan cache via iw (single source of truth)
+    SOURCE_NM = "nm"  # legacy: nmcli list, enriched with iw
 
     # NetworkManager rate-limits user-requested rescans (~10 s); rescanning
     # more often just returns the cached list, so rescans are time-based.
     _RESCAN_MIN_INTERVAL_S = 10.0
 
-    def __init__(self, interval_sec: int = 2, linger_secs: float = 120.0):
+    def __init__(self, interval_sec: int = 2, linger_secs: float = 120.0, source: str = "iw"):
         super().__init__()
+        self._source = source if source in (self.SOURCE_IW, self.SOURCE_NM) else self.SOURCE_IW
         self._interval = interval_sec
         self._linger_secs = linger_secs
         # bssid_lower → (AccessPoint, last_seen_monotonic)
@@ -1539,6 +1764,27 @@ class WiFiScanner(QThread):
         """Drop lingering APs on the next cycle (e.g. after an OUI DB update)."""
         self._clear_cache_requested = True
 
+    def _trigger_rescan(self) -> None:
+        """Ask NetworkManager for a fresh scan (iw source).
+
+        Triggering a scan needs CAP_NET_ADMIN (NL80211_CMD_TRIGGER_SCAN), so
+        an unprivileged app asks the network manager; NetworkManager allows
+        it for active local sessions (polkit org.freedesktop.NetworkManager.
+        wifi.scan).  Without NetworkManager the app still reads whatever the
+        host's own periodic scans leave in the kernel cache.
+        """
+        if not (os.path.isfile(NMCLI_BIN) and os.access(NMCLI_BIN, os.X_OK)):
+            return
+        try:
+            run_tool([NMCLI_BIN, "dev", "wifi", "rescan"], timeout=10, stop_event=self._stop_event)
+        except ScanCancelled:
+            raise
+        except Exception:
+            pass  # rate-limited or not permitted: keep reading the cache
+
+    def _iw_usable(self) -> bool:
+        return os.path.isfile(IW_BIN) and os.access(IW_BIN, os.X_OK) and bool(_detect_wifi_ifaces())
+
     def _nmcli_list(self, rescan: bool) -> subprocess.CompletedProcess:
         return run_tool(
             [NMCLI_BIN, "-t", "-f", NMCLI_FIELDS, "dev", "wifi", "list", "--rescan", "yes" if rescan else "no"],
@@ -1557,18 +1803,27 @@ class WiFiScanner(QThread):
             now = time.monotonic()
             do_rescan = (now - last_rescan) >= self._RESCAN_MIN_INTERVAL_S or cycle == 2
             try:
-                if do_rescan:
-                    self._nmcli_list(rescan=True)
-                    result = self._nmcli_list(rescan=True)
-                    last_rescan = time.monotonic()
-                else:
-                    result = self._nmcli_list(rescan=False)
-                if result.returncode == 0:
-                    aps = parse_nmcli(result.stdout)
-                    enrich_with_iw(aps, self._survey, self._stop_event)
+                if self._source == self.SOURCE_IW and self._iw_usable():
+                    if do_rescan:
+                        self._trigger_rescan()
+                        last_rescan = time.monotonic()
+                    aps = scan_from_iw(self._survey, self._stop_event)
+                    self.source_active.emit(self.SOURCE_IW)
                     self.data_ready.emit(self._merge_linger(aps))
                 else:
-                    self.scan_error.emit(result.stderr.strip())
+                    if do_rescan:
+                        self._nmcli_list(rescan=True)
+                        result = self._nmcli_list(rescan=True)
+                        last_rescan = time.monotonic()
+                    else:
+                        result = self._nmcli_list(rescan=False)
+                    if result.returncode == 0:
+                        aps = parse_nmcli(result.stdout)
+                        enrich_with_iw(aps, self._survey, self._stop_event)
+                        self.source_active.emit(self.SOURCE_NM)
+                        self.data_ready.emit(self._merge_linger(aps))
+                    else:
+                        self.scan_error.emit(result.stderr.strip())
             except ScanCancelled:
                 break
             except FileNotFoundError:

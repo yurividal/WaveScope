@@ -95,6 +95,30 @@ class MainWindowUIMixin:
         _tools_menu.addAction("📖  Update OUI Database", self._on_update_oui)
         _tools_menu.addSeparator()
         _tools_menu.addAction("📡  Packet Capture…", self._on_monitor_mode)
+        _tools_menu.addSeparator()
+        # Data source: kernel scan cache via iw (single source of truth) or
+        # the legacy NetworkManager list enriched with iw.
+        _src_menu = _tools_menu.addMenu("🧭  Data Source")
+        self._source_group = QActionGroup(self)
+        self._source_group.setExclusive(True)
+        self._source_actions: dict = {}
+        for key, text, tip in (
+            ("iw", "Kernel scan cache via iw (recommended)",
+             "All BSS data from the kernel's scan results as decoded by iw;\n"
+             "NetworkManager is only asked to trigger scans."),
+            ("nm", "NetworkManager + iw (legacy)",
+             "BSS list from NetworkManager, enriched with iw data (pre-2.1 behaviour)."),
+        ):
+            act = QAction(text, self, checkable=True)
+            act.setToolTip(tip)
+            act.setData(key)
+            self._source_group.addAction(act)
+            _src_menu.addAction(act)
+            self._source_actions[key] = act
+        _src_menu.setToolTipsVisible(True)
+        self._data_source = "iw"
+        self._source_actions["iw"].setChecked(True)
+        self._source_group.triggered.connect(lambda a: self._on_source_change(a.data()))
         self._btn_tools.clicked.connect(
             lambda: _tools_menu.exec(
                 self._btn_tools.mapToGlobal(self._btn_tools.rect().bottomLeft())
@@ -762,6 +786,9 @@ class MainWindowUIMixin:
 
         self._lbl_updated = QLabel("  Last scan: —  ")
         sb.addPermanentWidget(self._lbl_updated)
+        self._lbl_source = QLabel("")
+        self._lbl_source.setToolTip("Data source in use (Tools ▸ Data Source)")
+        sb.addPermanentWidget(self._lbl_source)
 
         _sep3 = QFrame()
         _sep3.setFrameShape(QFrame.Shape.VLine)

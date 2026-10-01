@@ -93,6 +93,7 @@ from PyQt6.QtGui import (
     QPen,
     QFontMetrics,
     QAction,
+    QActionGroup,
     QCursor,
 )
 
@@ -659,6 +660,16 @@ def dbm_color(dbm: float) -> QColor:
 def signal_color(signal: int) -> QColor:
     """Map a 0-100 nmcli SIGNAL percentage to the shared dBm palette."""
     return dbm_color(signal_to_dbm(signal))
+
+
+def dbm_to_nm_quality(dbm: float) -> int:
+    """NetworkManager's 0-100 signal quality for an RSSI in dBm.
+
+    Same mapping as nm_wifi_utils_level_to_quality() (src/core/nm-core-utils.c),
+    so the Signal % column means the same with either data source.
+    """
+    clamped = max(-100.0, min(-40.0, float(dbm)))
+    return max(0, min(100, 100 - int(abs(clamped + 40.0) * 100.0 / 60.0)))
 
 
 def signal_to_dbm(signal: int) -> int:
