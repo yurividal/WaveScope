@@ -203,7 +203,8 @@ Builds inside the same Ubuntu 22.04 image as the release CI (`scripts/docker/app
 
 ```bash
 # Requires: docker
-./scripts/build_appimage_docker.sh          # optional: pass a version, e.g. 2.0.0
+./scripts/build_appimage_docker.sh          # optional: pass a version, e.g. 2.0.1
+./scripts/test_appimage_xvfb.sh WaveScope-*-x86_64.AppImage   # launch test on a bare Ubuntu 22.04 (Xvfb)
 
 chmod +x WaveScope-*.AppImage
 ./WaveScope-*.AppImage

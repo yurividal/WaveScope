@@ -87,17 +87,45 @@ if [ -n "$PY_LIBDIR" ] && [ -n "$PY_LDLIB" ] && [ -f "$PY_LIBDIR/$PY_LDLIB" ]; t
     cp -a "$PY_LIBDIR/$PY_LDLIB" "$PY_RUNTIME/lib64/"
 fi
 
-# ── 3c. Bundle libgthread-2.0 ───────────────────────────────────────────────
-# The PyPI Qt 6 wheels link libgthread-2.0.so.0.  openSUSE ships it as a
-# separate package (libgthread-2_0-0) that minimal installs lack, and it is
-# *not* on the AppImage excludelist (pkg2appimage/excludelist lists it as
-# "bundle").  It is a tiny compatibility shim over the host's libglib-2.0,
-# so bundling it is safe; glib/gobject themselves stay host-provided.
-GTHREAD_LIB="$(ldconfig -p | awk '/libgthread-2\.0\.so\.0 .*x86-64/ {print $NF; exit}')"
-if [ -n "$GTHREAD_LIB" ] && [ -f "$GTHREAD_LIB" ]; then
-    cp -L "$GTHREAD_LIB" "$PY_RUNTIME/lib/libgthread-2.0.so.0"
-else
-    echo "WARNING: libgthread-2.0.so.0 not found on the build host; not bundled"
+# ── 3c. Bundle host libraries the PyPI Qt 6 wheels need ───────────────────
+# The Qt wheels bundle Qt itself but link these system libraries.  None of
+# them is on the AppImage excludelist (pkg2appimage/excludelist), and minimal
+# systems — including the AppImage catalog tester — lack them.  Without the
+# xcb helper libraries Qt >= 6.5 refuses to load its X11 platform plugin
+# ("xcb-cursor0 or libxcb-cursor0 is needed") and the app exits before any
+# window appears.  libgthread is a separate package on openSUSE.
+# Deliberately NOT bundled (host-provided everywhere, and bundling can break
+# the host): glibc, libxcb/libX11 (excludelisted), libEGL/libGL, fontconfig,
+# freetype, harfbuzz, glib/gobject/gio, dbus.
+BUNDLE_LIBS=(
+    libxcb-cursor.so.0
+    libxcb-icccm.so.4
+    libxcb-image.so.0
+    libxcb-keysyms.so.1
+    libxcb-render-util.so.0
+    libxcb-render.so.0
+    libxcb-shape.so.0
+    libxcb-util.so.1
+    libxcb-xkb.so.1
+    libxkbcommon.so.0
+    libxkbcommon-x11.so.0
+    libgthread-2.0.so.0
+)
+MISSING_LIBS=()
+for lib in "${BUNDLE_LIBS[@]}"; do
+    src="$(ldconfig -p | awk -v l="$lib" '$1 == l && /x86-64/ {print $NF; exit}')"
+    if [ -n "$src" ] && [ -f "$src" ]; then
+        cp -L "$src" "$PY_RUNTIME/lib/$lib"
+    else
+        MISSING_LIBS+=("$lib")
+    fi
+done
+if [ "${#MISSING_LIBS[@]}" -gt 0 ]; then
+    echo "ERROR: build host lacks libraries the AppImage must bundle: ${MISSING_LIBS[*]}"
+    echo "       Install: libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1"
+    echo "                libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-util1"
+    echo "                libxcb-xkb1 libxkbcommon0 libxkbcommon-x11-0 libglib2.0-0"
+    exit 1
 fi
 
 # ── 4. Internal launcher ─────────────────────────────────────────────────────
@@ -109,6 +137,10 @@ APPDIR="$(cd "$HERE/../.." && pwd)"
 APP_PREFIX="$APPDIR/usr/share/wavescope"
 
 PY_SITE="$(echo "$APP_PREFIX/.venv/lib/python"*/site-packages)"
+# main.py restores these for child processes (nmcli, iw, …) so the bundled
+# Python/libraries never leak into host tools.
+export WAVESCOPE_APPIMAGE=1
+export WAVESCOPE_HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
 export PYTHONHOME="$APP_PREFIX/python-runtime"
 export PYTHONPATH="$PY_SITE"
 export LD_LIBRARY_PATH="$APP_PREFIX/python-runtime/lib:$APP_PREFIX/python-runtime/lib64:${LD_LIBRARY_PATH:-}"

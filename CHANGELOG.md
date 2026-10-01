@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.1 — 2026-10-01
+
+### Fixes
+- **AppImage exited without showing a window on minimal systems** — the PyPI Qt 6 wheels need X11 helper libraries that minimal installs (including the AppImage catalog tester) lack: `libxcb-cursor`, `-icccm`, `-image`, `-keysyms`, `-render-util`, `-render`, `-shape`, `-util`, `-xkb`, `libxkbcommon` and `libxkbcommon-x11`. Without `libxcb-cursor` Qt ≥ 6.5 refuses to load its X11 plugin and aborts. None of these are on the AppImage excludelist, so the AppImage now bundles them (the build fails if the build host lacks any).
+- **Bundled runtime leaked into host tools** — inside the AppImage, `nmcli`, `iw` and other child processes inherited the bundled `LD_LIBRARY_PATH`/`PYTHONHOME`; they now get the host's original environment.
+
+### Packaging
+- **AppImage launch test in CI** — `scripts/test_appimage_xvfb.sh` starts the AppImage under Xvfb in a bare Ubuntu 22.04 container (only excludelisted host libraries installed) and requires both the missing-dependency dialog and, with `WAVESCOPE_SKIP_DEPENDENCY_CHECK=1`, the main window to appear and keep running. The release job runs it before uploading, so a non-starting AppImage is never published.
+
 ## v2.0.0 — 2026-09-30
 
 Full correctness pass over the 802.11 parsing, plus Wi-Fi 6E/7 and RF-analysis features. iw and nmcli formats were checked against their upstream sources (iw `scan.c`/`util.c`/`station.c`/`link.c`, NetworkManager `nmcli/devices.c`, hostap `ieee802_11_defs.h`, Wireshark's 802.11 dissector).

@@ -5,8 +5,32 @@ This file bootstraps QApplication and launches the modularized MainWindow.
 Core logic and UI components are split under the `wavescope_app` package.
 """
 
+import os
 import sys
 from pathlib import Path
+
+
+def _restore_host_env_for_children() -> None:
+    """Inside the AppImage, stop the bundled runtime leaking into subprocesses.
+
+    The AppImage launcher points PYTHONHOME/PYTHONPATH and LD_LIBRARY_PATH at
+    the bundled Python and libraries.  This process has already consumed them
+    (the dynamic loader reads LD_LIBRARY_PATH once, at startup, and keeps
+    using it for Qt's plugin dlopen), so resetting os.environ here only
+    changes what child processes — nmcli, iw, pkexec, systemctl — inherit.
+    """
+    if os.environ.get("WAVESCOPE_APPIMAGE") != "1":
+        return
+    for var in ("PYTHONHOME", "PYTHONPATH"):
+        os.environ.pop(var, None)
+    host_ld = os.environ.pop("WAVESCOPE_HOST_LD_LIBRARY_PATH", "")
+    if host_ld:
+        os.environ["LD_LIBRARY_PATH"] = host_ld
+    else:
+        os.environ.pop("LD_LIBRARY_PATH", None)
+
+
+_restore_host_env_for_children()
 
 import pyqtgraph as pg
 from PyQt6.QtGui import QFont, QIcon
@@ -37,7 +61,9 @@ def main():
 
     app.setPalette(_dark_palette())
 
-    missing = find_missing_tools()
+    # WAVESCOPE_SKIP_DEPENDENCY_CHECK=1 is for automated tests (e.g. the Xvfb
+    # AppImage test), which need the main window even without nmcli/iw.
+    missing = [] if os.environ.get("WAVESCOPE_SKIP_DEPENDENCY_CHECK") == "1" else find_missing_tools()
     if missing and not warn_missing_tools_and_confirm(missing):
         sys.exit(1)
 

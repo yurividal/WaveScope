@@ -70,6 +70,7 @@ from `core_base.py`. Output goes to the repository root.
 | .rpm (openSUSE) | `./scripts/build_opensuse.sh` | `rpm-build` |
 | AppImage | `./scripts/build_appimage.sh` | `appimagetool` on the host |
 | AppImage (Docker) | `./scripts/build_appimage_docker.sh` | `docker` |
+| AppImage launch test (Xvfb, bare Ubuntu 22.04) | `./scripts/test_appimage_xvfb.sh WaveScope-*.AppImage` | `docker` |
 
 Release builds run in `.github/workflows/release.yml` when a `vX.Y.Z` tag is
 pushed. To rebuild an existing tag, run the workflow manually from the Actions

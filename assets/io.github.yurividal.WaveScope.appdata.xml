@@ -64,6 +64,12 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="2.0.1" date="2026-10-01">
+      <description>
+        <p>AppImage now starts on minimal systems: bundles the X11 (xcb) and xkbcommon libraries Qt needs.</p>
+      </description>
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v2.0.1</url>
+    </release>
     <release version="2.0.0" date="2026-09-30">
       <description>
         <p>802.11 parsing correctness pass, hardened packet capture, Wi-Fi 6E/7 detail (320 MHz, puncturing, MLD, PSC, 6 GHz AP power type), RF analysis (channel congestion, BSS color collisions, roam candidates), per-radio SSID grouping in the channel graph, and saved settings.</p>

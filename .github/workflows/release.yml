@@ -190,6 +190,10 @@ jobs:
           # the AppDir metadata with them (same as the Docker builder image)
           sudo apt-get update -qq
           sudo apt-get install -y -qq appstream desktop-file-utils
+          # host libraries bundled into the AppImage (build_appimage.sh 3c)
+          sudo apt-get install -y -qq libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-render-util0 libxcb-render0 libxcb-shape0 \
+            libxcb-util1 libxcb-xkb1 libxkbcommon0 libxkbcommon-x11-0 libglib2.0-0
           wget -qO appimagetool-x86_64.AppImage \
             https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           chmod +x appimagetool-x86_64.AppImage
@@ -201,6 +205,13 @@ jobs:
         run: |
           chmod +x scripts/build_appimage.sh
           ./scripts/build_appimage.sh "${{ steps.version.outputs.VERSION }}"
+
+      - name: Launch test (Xvfb, bare Ubuntu 22.04 container)
+        # Same check as the AppImage catalog: the app must show a window on a
+        # minimal system.  A broken AppImage never reaches the release.
+        run: |
+          chmod +x scripts/test_appimage_xvfb.sh
+          ./scripts/test_appimage_xvfb.sh "WaveScope-${{ steps.version.outputs.VERSION }}-x86_64.AppImage"
 
       - name: Upload AppImage to release
         uses: softprops/action-gh-release@v2
