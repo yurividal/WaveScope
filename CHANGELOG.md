@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.1.2 — 2026-10-01
 
 ### Verified against IEEE Std 802.11-2024 (the three questions the spec review left open)
 - **6 GHz AP power type** — the Regulatory Info subfield is 4 bits (Figure 9-908) and decoded per Table E-13: 0 Indoor, 1 Standard Power, 2 Very Low Power, 3 Indoor Enabled, 7 "AP role not relevant", 8 Indoor Standard Power; 4 is the deprecated 3-bit encoding of Indoor SP; other values are shown as Reserved. Previously only 0-4 were mapped.

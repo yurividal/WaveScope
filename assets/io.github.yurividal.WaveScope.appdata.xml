@@ -64,6 +64,12 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="2.1.2" date="2026-10-01">
+      <description>
+        <p>Verified against IEEE Std 802.11-2024: 6 GHz AP power type decoded per Table E-13, operating-class-aware Country element channel ranges, and the Mobility Domain ID shown in both octet and numeric form.</p>
+      </description>
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v2.1.2</url>
+    </release>
     <release version="2.1.1" date="2026-10-01">
       <description>
         <p>Data-accuracy fixes from an 802.11 spec review: legacy rates, HT rates, country power limits, group management cipher, TPC sign, OWE transition labels, Suite-B naming, Reduced Neighbor Report flags, 80+80 MHz placement, 160 MHz rates and stricter 6 GHz / PMF checks; the Wireshark cross-check covers these fields now.</p>
