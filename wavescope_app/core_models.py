@@ -77,6 +77,7 @@ class AccessPoint:
     last_seen_ms: Optional[int] = None  # iw "last seen … ms ago"
     radio_params_from: str = ""  # sibling BSSID whose radio-level iw data was inherited
     gen_inferred: bool = False  # wifi_gen guessed from the band (no beacon data)
+    label: str = ""  # user annotation (AnnotationStore), set by the GUI each scan
     iw_restored: bool = False  # iw fields restored from the GUI's miss-cache this cycle
     # ── Connected-session telemetry (iw link / iw station dump) ────────────
     conn_iface: str = ""

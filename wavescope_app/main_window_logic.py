@@ -10,6 +10,11 @@ from .core_scanner import _IW_COPY_FIELDS, _CONN_COPY_FIELDS, _inherit_radio_par
 from .graphs import ChannelAllocationsDialog
 from .capture import CaptureTypeDialog, ManagedCaptureWindow, MonitorModeWindow
 from .known_ssids import KnownSSIDStore, KnownSSIDDialog
+from .column_view import apply_profile
+from .issues import IssueSettings, detect_issues
+from .session import export_csv, load_session, save_session
+from .compare import CompareDialog
+from .beeper import FindAPDialog
 from .theme import (
     IW_GEN_COLORS,
     _dark_palette,
@@ -46,6 +51,39 @@ from .theme import (
     HTML_MUTED,
     FALLBACK_GRAY,
 )
+
+
+def load_issue_settings(settings) -> IssueSettings:
+    """IssueSettings from QSettings (JSON), defaults for anything missing."""
+    cfg = IssueSettings()
+    raw = settings.value("issues/config", "")
+    try:
+        d = json.loads(raw) if raw else {}
+        cfg.enabled.update({k: bool(v) for k, v in d.get("enabled", {}).items() if k in cfg.enabled})
+        for k in ("overlap_dbm", "util_pct", "max_ssids", "congestion_score"):
+            if k in d:
+                setattr(cfg, k, int(d[k]))
+    except (ValueError, TypeError):
+        pass
+    return cfg
+
+
+def save_issue_settings(settings, cfg: IssueSettings) -> None:
+    settings.setValue(
+        "issues/config",
+        json.dumps(
+            {
+                "enabled": cfg.enabled,
+                "overlap_dbm": cfg.overlap_dbm,
+                "util_pct": cfg.util_pct,
+                "max_ssids": cfg.max_ssids,
+                "congestion_score": cfg.congestion_score,
+            }
+        ),
+    )
+
+
+_SEVERITY_ICON = {"error": "⛔ Error", "warning": "⚠ Warning", "info": "ℹ Info"}
 
 
 class MainWindowLogicMixin:
@@ -270,6 +308,10 @@ class MainWindowLogicMixin:
         self._color_collisions = find_bss_color_collisions(aps)
         self._channel_graph.set_analysis(self._channel_stats, set(self._color_collisions))
 
+        # User labels (exact BSSID or wildcard pattern)
+        for ap in aps:
+            ap.label = self._annotations.label_for(ap.bssid)
+
         self._aps = aps
         self._model.update(aps)
         self._refresh_selected_details()
@@ -279,13 +321,21 @@ class MainWindowLogicMixin:
         self._history_graph.set_ssid_colors(self._model.ssid_colors())
         self._history_graph.push(aps)
 
-        # Show AP Name / Power columns only when at least one AP has a value
-        any_ap_name = any(ap.ap_name for ap in aps)
-        any_pwr = any(ap.power_level[0] is not None for ap in aps)
-        if self._table.isColumnHidden(COL_APNAME) == any_ap_name or self._table.isColumnHidden(COL_CISCO_PWR) == any_pwr:
-            self._table.setColumnHidden(COL_APNAME, not any_ap_name)
-            self._table.setColumnHidden(COL_CISCO_PWR, not any_pwr)
-            self._auto_size_table_columns()
+        # Columns hidden for lack of data (only while the profile shows them)
+        auto = set()
+        if not any(ap.ap_name for ap in aps):
+            auto.add(COL_APNAME)
+        if not any(ap.power_level[0] is not None for ap in aps):
+            auto.add(COL_CISCO_PWR)
+        if not any(ap.label for ap in aps):
+            auto.add(COL_LABEL)
+        if auto != self._auto_hidden_cols:
+            self._auto_hidden_cols = auto
+            self._apply_column_profile(self._active_profile)
+
+        self._refresh_issues(aps)
+        if self._finder is not None:
+            self._finder.update_aps(aps)
 
         # Update the AP sidebar (skips rebuild if groups haven't changed)
         self._ap_sidebar.update_groups(aps)
@@ -503,6 +553,8 @@ class MainWindowLogicMixin:
             self._btn_pause.setText("▶ Resume")
             self.statusBar().showMessage("Paused — click Resume to continue scanning")
         else:
+            if self._review_mode:
+                self._end_review_banner()
             self._start_scanner()
             self._btn_pause.setText("⏸ Pause")
             self.statusBar().showMessage("Resumed scanning…")
@@ -719,6 +771,21 @@ class MainWindowLogicMixin:
                     )
                 )
 
+        menu.addSeparator()
+
+        # ── Labels / compare / find ───────────────────────────────────────
+        cur_label = self._annotations.exact(ap.bssid)
+        a_lbl = menu.addAction("🏷  Set label…" if not cur_label else f"🏷  Edit label '{cur_label}'…")
+        a_lbl.triggered.connect(lambda checked=False, b=ap.bssid: self._edit_label(b.lower(), exact=True))
+        a_lbl_ap = menu.addAction("🏷  Label all BSSIDs of this AP…")
+        a_lbl_ap.setToolTip("Pattern on the 16-address BSSID block, e.g. 74:11:b2:c7:22:4*")
+        a_lbl_ap.triggered.connect(lambda checked=False, b=ap.bssid: self._edit_label(b.lower()[:-1] + "*", exact=False))
+        sel = self._selected_bssids()
+        if len(sel) >= 2:
+            a_cmp = menu.addAction(f"⇄  Compare selected ({min(len(sel), 4)})")
+            a_cmp.triggered.connect(lambda checked=False, bs=list(sel)[:4]: self._open_compare(bs))
+        a_find = menu.addAction("🔊  Find this AP…")
+        a_find.triggered.connect(lambda checked=False, b=ap.bssid, s=ap.display_ssid: self._open_finder(b, s))
         menu.addSeparator()
 
         # Details shortcut
@@ -1613,6 +1680,15 @@ class MainWindowLogicMixin:
         if 0 <= tab < self._tabs.count():
             self._tabs.setCurrentIndex(tab)
 
+        self._find_sound_default = st.value("find/sound", "true") not in (False, "false")
+        prof = st.value("table/profile", "Default")
+        if isinstance(prof, str) and prof in self._profile_store.names():
+            self._active_profile = prof
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.setCurrentText(self._active_profile)
+        self._profile_combo.blockSignals(False)
+        self._apply_column_profile(self._active_profile)
+
         widths = st.value("table/user_column_widths", {})
         if isinstance(widths, dict):
             for col_s, w in widths.items():
@@ -1620,7 +1696,7 @@ class MainWindowLogicMixin:
                     col, w = int(col_s), int(w)
                 except (TypeError, ValueError):
                     continue
-                if 0 <= col < len(TABLE_HEADERS) and w > 0:
+                if 0 <= col < len(COLUMN_HEADERS) and w > 0:
                     self._table.setColumnWidth(col, w)
                     self._user_sized_cols.add(col)
 
@@ -1642,4 +1718,254 @@ class MainWindowLogicMixin:
             "table/user_column_widths",
             {str(c): self._table.columnWidth(c) for c in sorted(self._user_sized_cols)},
         )
+        st.setValue("table/profile", self._active_profile)
+        st.setValue("find/sound", self._find_sound_default)
+        save_issue_settings(st, self._issue_cfg)
         st.sync()
+
+    # ── Column profiles ──────────────────────────────────────────────────
+
+    def _apply_column_profile(self, name: str, override=None) -> None:
+        # Unsaved edits from Settings stay in effect for that profile until
+        # another profile is chosen.
+        if override is not None:
+            self._profile_override = override
+        elif getattr(self, "_profile_override", None) is not None and self._profile_override.name == name:
+            override = self._profile_override
+        profile = override if override is not None else self._profile_store.get(name)
+        self._suspend_col_resize_tracking = True
+        try:
+            apply_profile(self._table, profile, self._auto_hidden_cols)
+        finally:
+            self._suspend_col_resize_tracking = False
+        self._auto_size_table_columns()
+
+    def _on_profile_selected(self, name: str) -> None:
+        if name and name in self._profile_store.names():
+            self._active_profile = name
+            self._profile_override = None
+            self._apply_column_profile(name)
+
+    def _refresh_profile_combo(self) -> None:
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.clear()
+        self._profile_combo.addItems(self._profile_store.names())
+        self._profile_combo.setCurrentText(self._active_profile)
+        self._profile_combo.blockSignals(False)
+
+    # ── Selection helpers ────────────────────────────────────────────────
+
+    def _selected_bssids(self) -> List[str]:
+        sm = self._table.selectionModel()
+        out = []
+        for pi in (sm.selectedRows() if sm else []):
+            ap = self._model.ap_at(self._proxy.mapToSource(pi).row())
+            if ap is not None:
+                out.append(ap.bssid)
+        return out
+
+    def _select_bssids(self, bssids: List[str]) -> None:
+        sm = self._table.selectionModel()
+        if sm is None:
+            return
+        sm.clearSelection()
+        first = None
+        for b in bssids:
+            row = self._model.row_of_bssid(b)
+            if row < 0:
+                continue
+            pidx = self._proxy.mapFromSource(self._model.index(row, 0))
+            if not pidx.isValid():
+                continue
+            sm.select(pidx, QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+            first = first or pidx
+        if first is not None:
+            self._table.scrollTo(first)
+
+    # ── Labels ───────────────────────────────────────────────────────────
+
+    def _edit_label(self, pattern: str, exact: bool) -> None:
+        current = self._annotations.exact(pattern)
+        prompt = (
+            f"Label for {pattern.upper()}:" if exact
+            else f"Label for every BSSID matching {pattern}:"
+        )
+        text, ok = QInputDialog.getText(self, "Label", prompt + "\n(empty = remove)", text=current)
+        if not ok:
+            return
+        self._annotations.set(pattern, text)
+        self._relabel()
+
+    def _relabel(self) -> None:
+        for ap in self._aps:
+            ap.label = self._annotations.label_for(ap.bssid)
+        self._model.update(list(self._aps))
+        auto = set(self._auto_hidden_cols)
+        auto.discard(COL_LABEL) if any(a.label for a in self._aps) else auto.add(COL_LABEL)
+        if auto != self._auto_hidden_cols:
+            self._auto_hidden_cols = auto
+            self._apply_column_profile(self._active_profile)
+        self._refresh_selected_details()
+
+    # ── Issues ───────────────────────────────────────────────────────────
+
+    def _refresh_issues(self, aps: List[AccessPoint]) -> None:
+        self._issues = detect_issues(aps, self._issue_cfg)
+        t = self._issues_table
+        t.setRowCount(len(self._issues))
+        colors = {"error": SIG_POOR, "warning": SIG_WEAK, "info": HTML_MUTED}
+        for r, iss in enumerate(self._issues):
+            sev = QTableWidgetItem(_SEVERITY_ICON.get(iss.severity, iss.severity))
+            sev.setForeground(QBrush(QColor(colors.get(iss.severity, HTML_MUTED))))
+            t.setItem(r, 0, sev)
+            t.setItem(r, 1, QTableWidgetItem(iss.title))
+            t.setItem(r, 2, QTableWidgetItem(iss.ssid))
+            bss = ", ".join(b.upper() for b in iss.bssids[:3]) + (f" +{len(iss.bssids) - 3}" if len(iss.bssids) > 3 else "")
+            t.setItem(r, 3, QTableWidgetItem(bss))
+            t.setItem(r, 4, QTableWidgetItem(iss.detail))
+        n_err = sum(1 for i in self._issues if i.severity == "error")
+        n_warn = sum(1 for i in self._issues if i.severity == "warning")
+        title = "⚠  Issues"
+        if self._issues:
+            title += f" ({n_err + n_warn}" + (f", {n_err} errors" if n_err else "") + ")"
+        self._tabs.setTabText(self._issues_tab_index, title)
+
+    def _on_issue_clicked(self, row: int, _col: int) -> None:
+        if 0 <= row < len(self._issues):
+            self._select_bssids(self._issues[row].bssids)
+
+    # ── Compare / Find AP ────────────────────────────────────────────────
+
+    def _open_compare(self, bssids: List[str]) -> None:
+        aps = [a for b in bssids for a in self._aps if a.bssid == b]
+        if len(aps) >= 2:
+            CompareDialog(aps, parent=self).exec()
+
+    def _open_finder(self, bssid: str, ssid: str) -> None:
+        if self._finder is not None:
+            self._finder.close()
+        self._finder = FindAPDialog(bssid, ssid, parent=self, sound=self._find_sound_default)
+        self._finder.finished.connect(self._on_finder_closed)
+        # Fastest refresh while locating; restored on close.
+        if self._finder_prev_interval is None:
+            self._finder_prev_interval = self._interval_combo.currentIndex()
+            self._interval_combo.setCurrentIndex(0)
+        self._finder.show()
+        self._finder.update_aps(self._aps)
+
+    def _on_finder_closed(self, *_):
+        self._finder = None
+        if self._finder_prev_interval is not None:
+            self._interval_combo.setCurrentIndex(self._finder_prev_interval)
+            self._finder_prev_interval = None
+
+    # ── Sessions / export ────────────────────────────────────────────────
+
+    def _default_file_name(self, ext: str) -> str:
+        return str(Path.home() / f"wavescope-{time.strftime('%Y%m%d-%H%M%S')}.{ext}")
+
+    def _on_save_session(self) -> None:
+        if not self._aps:
+            QMessageBox.information(self, "Save session", "Nothing to save yet — wait for the first scan.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save session", self._default_file_name("wavescope.json"), "WaveScope session (*.json)"
+        )
+        if not path:
+            return
+        try:
+            save_session(Path(path), self._aps, self._data_source)
+            self.statusBar().showMessage(f"Session saved: {path}")
+        except OSError as exc:
+            QMessageBox.warning(self, "Save session", f"Could not save:\n{exc}")
+
+    def _on_open_session(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Open session", str(Path.home()), "WaveScope session (*.json)")
+        if not path:
+            return
+        try:
+            meta, aps = load_session(Path(path))
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Open session", f"Could not open:\n{exc}")
+            return
+        self._enter_review_mode(Path(path).name, meta, aps)
+
+    def _enter_review_mode(self, name: str, meta: dict, aps: List[AccessPoint]) -> None:
+        if not self._btn_pause.isChecked():
+            self._btn_pause.setChecked(True)  # → _on_pause(True): scanner stops
+        self._review_mode = True
+        for cache in (self._sticky_cache, self._iw_cache, self._iw_seen_at, self._conn_counter_prev):
+            cache.clear()
+        self._review_label.setText(
+            f"📂  Reviewing saved session <b>{html.escape(name)}</b> — saved {html.escape(str(meta.get('saved_at') or '?'))}, "
+            f"{len(aps)} BSSs ({html.escape(str(meta.get('app') or ''))}, source {html.escape(str(meta.get('source') or '?'))}). "
+            "Scanning is paused."
+        )
+        self._review_banner.show()
+        self._on_data(aps)
+        self.statusBar().showMessage(f"Reviewing {name}")
+
+    def _end_review_banner(self) -> None:
+        self._review_mode = False
+        self._review_banner.hide()
+
+    def _leave_review_mode(self) -> None:
+        self._end_review_banner()
+        if self._btn_pause.isChecked():
+            self._btn_pause.setChecked(False)  # → _on_pause(False): scanner restarts
+
+    def _on_export_csv(self) -> None:
+        aps = self._visible_aps()
+        if not aps:
+            QMessageBox.information(self, "Export CSV", "No access points to export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export CSV", self._default_file_name("csv"), "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            export_csv(Path(path), aps)
+            self.statusBar().showMessage(f"Exported {len(aps)} BSSs (as filtered) to {path}")
+        except OSError as exc:
+            QMessageBox.warning(self, "Export CSV", f"Could not export:\n{exc}")
+
+    # ── Settings dialog ──────────────────────────────────────────────────
+
+    def _on_open_settings(self) -> None:
+        from .settings_dialog import SettingsDialog
+
+        SettingsDialog(self).exec()
+
+    def apply_settings(
+        self,
+        theme_index: int,
+        interval_index: int,
+        linger_s: int,
+        source: str,
+        label_mode: str,
+        profile: str,
+        profile_override,
+        labels,
+        issue_cfg: IssueSettings,
+        find_sound: bool,
+    ) -> None:
+        """Apply values from the Settings dialog (toolbar controls follow)."""
+        if self._theme_combo.currentIndex() != theme_index:
+            self._theme_combo.setCurrentIndex(theme_index)
+        if self._finder_prev_interval is not None:
+            self._finder_prev_interval = interval_index  # restored when Find AP closes
+        elif self._interval_combo.currentIndex() != interval_index:
+            self._interval_combo.setCurrentIndex(interval_index)
+        self._linger_spin.setValue(linger_s)
+        if source != self._data_source and source in self._source_actions:
+            self._source_actions[source].setChecked(True)
+            self._on_source_change(source)
+        self._channel_graph.set_label_mode(label_mode)
+        self._active_profile = profile if profile in self._profile_store.names() else "Default"
+        self._refresh_profile_combo()
+        self._apply_column_profile(self._active_profile, override=profile_override)
+        self._annotations.replace_all(labels)
+        self._relabel()
+        self._issue_cfg = issue_cfg
+        self._refresh_issues(self._aps)
+        self._find_sound_default = find_sound
+        self._save_settings()

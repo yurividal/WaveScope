@@ -274,36 +274,6 @@ class ChannelGraphWidget(QWidget):
         "5 GHz": 5,
         "6 GHz": 8,  # wider: 1200 MHz span vs 840 for 5 GHz
     }
-    # Tick stride per band — subsample dense channel grids for readability
-    _BAND_TICK_STRIDE: Dict[str, int] = {
-        "2.4 GHz": 1,  # 14 channels → show all
-        "5 GHz": 1,  # ~36 channels → show all
-        "6 GHz": 1,  # ch 1,5,9,…,233 (all 20 MHz primaries)
-    }
-    # For 6 GHz: show the 80/160/320 MHz anchor channels used by Wi-Fi 6E/7 APs
-    # These are the standard 6 GHz preferred scanning channels (PSC) for 20 MHz:
-    # every 4th primary, i.e. ch 5, 21, 37, 53, 69, 85, 101, 117, 133, 149, 165,
-    # 181, 197, 213, 229 — plus ch 1 and 233 as band-edge anchors.
-    _6GHZ_TICK_CHANS: List[int] = [
-        1,
-        5,
-        21,
-        37,
-        53,
-        69,
-        85,
-        101,
-        117,
-        133,
-        149,
-        165,
-        181,
-        197,
-        213,
-        229,
-        233,
-    ]
-
     def __init__(self):
         super().__init__()
         outer = QVBoxLayout(self)
@@ -467,20 +437,10 @@ class ChannelGraphWidget(QWidget):
         self._band_channels[band] = {
             float(f): c for c, f in tick_src.items() if xmin <= f <= xmax
         }
-        stride = self._BAND_TICK_STRIDE.get(band, 1)
-        sorted_chan = sorted(tick_src.items(), key=lambda x: x[1])
-        ticks = [
-            (f, str(c))
-            for i, (c, f) in enumerate(sorted_chan)
-            if xmin <= f <= xmax and i % stride == 0
-        ]
-        if ticks:
-            subband_ticks = [
-                (((x0 + x1) / 2.0), "\n" + lbl)
-                for x0, x1, _c, lbl in _BAND_SUBBAND_HEADERS.get(band, [])
-                if xmin <= ((x0 + x1) / 2.0) <= xmax
-            ]
-            pw.getAxis("bottom").setTicks([sorted(ticks + subband_ticks, key=lambda t: t[0])])
+        # Channel labels adapt to the space available (resize / zoom).
+        vb = pw.getViewBox()
+        vb.sigXRangeChanged.connect(lambda *_a, b=band: self._update_channel_ticks(b))
+        vb.sigResized.connect(lambda *_a, b=band: self._update_channel_ticks(b))
 
         vr = self._view_ranges.get(band)
         if vr:
@@ -491,6 +451,49 @@ class ChannelGraphWidget(QWidget):
             pw.setXRange(xmin, xmax, padding=0.01)
             pw.setYRange(floor, CHAN_DBM_CEIL, padding=0.0)
         return pw
+
+    # Minimum horizontal pixels per channel label before labels are thinned.
+    _MIN_PX_PER_LABEL = 30
+
+    def _update_channel_ticks(self, band: str) -> None:
+        """Label every channel when there is room, else every 2nd/4th/8th.
+
+        On 6 GHz the thinned sets are offset by one so they always contain
+        the Preferred Scanning Channels (5, 21, 37 … are every 4th channel
+        starting at index 1), which keep their emphasis on the axis.
+        """
+        pw = self._plots.get(band)
+        if pw is None:
+            return
+        xmin, xmax = self._BAND_EXTENTS[band]
+        (v0, v1), _ = pw.getViewBox().viewRange()
+        chans = sorted(self._BAND_TICKS[band].items(), key=lambda x: x[1])
+        chans = [(c, f) for c, f in chans if xmin <= f <= xmax]
+        # Size the stride for the *densest* stretch (adjacent primaries),
+        # not the average: 5 GHz has a wide gap between ch 64 and 100, so an
+        # average would leave ch 100-177 cramped.
+        width_px = max(1.0, float(pw.getViewBox().width()))
+        px_per_mhz = width_px / max(1.0, float(v1 - v0))
+        gaps = [b[1] - a[1] for a, b in zip(chans, chans[1:]) if b[1] > a[1]]
+        dense_gap_px = (min(gaps) if gaps else 20) * px_per_mhz
+        stride = 1
+        while stride < 16 and dense_gap_px * stride < self._MIN_PX_PER_LABEL:
+            stride *= 2
+        offset = 1 if band == "6 GHz" and stride > 1 else 0
+        if band == "2.4 GHz" and stride >= 4:
+            # thinned 2.4 GHz axis: the non-overlapping 1/6/11 plan
+            ticks = [(f, str(c)) for c, f in chans if c in (1, 6, 11)]
+        else:
+            ticks = [(f, str(c)) for i, (c, f) in enumerate(chans) if i % stride == offset % stride]
+        subband = [
+            (((x0 + x1) / 2.0), "\n" + lbl)
+            for x0, x1, _c, lbl in _BAND_SUBBAND_HEADERS.get(band, [])
+            if xmin <= ((x0 + x1) / 2.0) <= xmax
+        ]
+        key = (stride, offset)
+        if getattr(pw, "_tick_key", None) != key:
+            pw._tick_key = key
+            pw.getAxis("bottom").setTicks([sorted(ticks + subband, key=lambda t: t[0])])
 
     def _rebuild_panels(self, bands: List[str]):
         # Remember zoom/pan so a band-set change doesn't reset the user's view.
@@ -515,6 +518,7 @@ class ChannelGraphWidget(QWidget):
             self._panels_layout.addWidget(pw, self._BAND_STRETCH.get(band, 3))
             self._plots[band] = pw
             self._draw_static(band, pw)
+            self._update_channel_ticks(band)
 
         self._active_bands = list(bands)
 

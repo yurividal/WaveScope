@@ -10,6 +10,20 @@
 - Built entirely from iw: SSID (iw's escaping reversed, UTF-8 safe), connected BSS, security (NM-equivalent tokens, so labels and filters are unchanged), Signal % (NetworkManager's own dBm mapping) and the max PHY rate (EHT/HE/VHT/HT/legacy).
 - **Beacon-only IEs** — iw's `scan dump -u` prints just the first IE set; WaveScope now also reads `scan dump -b` (iw accepts only one option at a time) to pick up beacon-only elements such as TIM/DTIM.
 
+### Troubleshooting features
+- **Settings dialog** (Tools ▸ Settings…, Ctrl+,): General (theme, refresh, linger, data source), Graph, Columns, Labels, Issues and Find AP pages in one place; the toolbar controls remain as shortcuts.
+- **Issues tab** — configuration problems found in the current scan, each with severity and a one-line explanation: WEP / open / WPA1-TKIP, 6 GHz without WPA3/OWE, WPA3-SAE without PMF, PMF disabled, 802.11b rates, 40 MHz on 2.4 GHz, overlapping 2.4 GHz channels, high channel utilization, congested channels, too many SSIDs per radio, BSS color collisions, inconsistent security/PMF/k-v-r/mobility domain/country across one SSID (the WPA3 6 GHz transition design is not flagged), hard-to-discover 6 GHz BSSs, unusual DTIM/beacon interval, hidden SSIDs. Pairwise checks are reported once per pair of radios. Click an issue to select the APs; checks and thresholds are configurable.
+- **Compare** (select 2-4 rows ▸ right-click ▸ Compare) — every field side by side, differences highlighted, "only differences" toggle.
+- **Labels** — per-BSSID labels with wildcard patterns (e.g. `74:11:b2:c7:22:4*` for all BSSIDs of one AP); set from the context menu, shown in a Label column, searchable, managed in Settings.
+- **Column profiles** — built-in (Default, RF / Channel, Security, Roaming, Survey) and custom profiles with column choice, order and **pinned leading columns** that stay visible while scrolling sideways; switch from the toolbar. 17 more fields are available as columns (PMF, AKM suites, BSS color, DTIM, beacon interval, mobility domain, MLD MAC, RSNX, basic rates, …).
+- **Find AP** (right-click ▸ Find this AP…) — signal meter with a beeper that gets faster and higher as the signal rises; uses the desktop's audio player (pw-play / paplay / aplay). The refresh interval is 1 s while it is open.
+- **Sessions & export** — save the current scan to a session file and review it later (scanning paused, banner to resume); export the (filtered) table to CSV with every field. Shortcuts Ctrl+S / Ctrl+O / Ctrl+E.
+- **Field registry** shared by table columns, CSV export and Compare, so all three always agree.
+
+### Fixes
+- **Table row striping** alternated wrongly (several dark rows in a row): rows were striped by model order, which since the in-place row diff no longer matches the sorted order on screen. Striping is now done by the views.
+- **Channel axis labels overlapped** at normal window widths; labels now thin out to every 2nd/4th/8th channel as space requires (recomputed on resize and zoom), keeping the 1/6/11 plan on 2.4 GHz and the PSCs on 6 GHz.
+
 ### Changes
 - **6 GHz PSC channels emphasized on the axis** — bold, in a vivid shade of their U-NII sub-band colour — instead of triangle markers on the plot floor; hovering a channel still says "Preferred Scanning Channel (PSC)".
 

@@ -62,6 +62,12 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QInputDialog,
+    QStackedWidget,
+    QGroupBox,
+    QRadioButton,
 )
 from PyQt6.QtCore import (
     Qt,
@@ -95,6 +101,8 @@ from PyQt6.QtGui import (
     QAction,
     QActionGroup,
     QCursor,
+    QKeySequence,
+    QShortcut,
 )
 
 import pyqtgraph as pg

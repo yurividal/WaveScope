@@ -5,6 +5,23 @@ Contains table headers/columns plus Qt table and filter proxy models.
 
 from .core_scanner import *
 from .theme import IW_GEN_COLORS
+from .fields import TABLE_EXTRA_FIELDS
+
+# ── Column identity ──────────────────────────────────────────────────────────
+# The first len(TABLE_HEADERS) columns keep their historic COL_* indices
+# (filters and the context menu use them).  Extra columns come from the field
+# registry.  Column *keys* are stable identifiers used by column profiles.
+BASE_COLUMN_KEYS = [
+    "inuse", "ssid", "bssid", "manufacturer", "band", "country", "channel", "freq",
+    "width", "span", "signal", "dbm", "rate", "security", "phy", "gen", "util",
+    "clients", "roaming", "apname", "power",
+]
+assert len(BASE_COLUMN_KEYS) == len(TABLE_HEADERS)
+EXTRA_COL_START = len(TABLE_HEADERS)
+COLUMN_KEYS = BASE_COLUMN_KEYS + [f.key for f in TABLE_EXTRA_FIELDS]
+COLUMN_HEADERS = list(TABLE_HEADERS) + [f.label for f in TABLE_EXTRA_FIELDS]
+COLUMN_INDEX = {k: i for i, k in enumerate(COLUMN_KEYS)}
+COL_LABEL = COLUMN_INDEX["label"]
 
 
 class APTableModel(QAbstractTableModel):
@@ -58,7 +75,7 @@ class APTableModel(QAbstractTableModel):
             self._aps[i] = new_by_key.pop(old_ap.bssid.lower())
         if self._aps:
             self.dataChanged.emit(
-                self.index(0, 0), self.index(len(self._aps) - 1, len(TABLE_HEADERS) - 1)
+                self.index(0, 0), self.index(len(self._aps) - 1, len(COLUMN_HEADERS) - 1)
             )
 
         # 3. Append new rows (the proxy sorts them into place).
@@ -83,14 +100,14 @@ class APTableModel(QAbstractTableModel):
         return len(self._aps)
 
     def columnCount(self, parent=QModelIndex()):
-        return len(TABLE_HEADERS)
+        return len(COLUMN_HEADERS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if (
             orientation == Qt.Orientation.Horizontal
             and role == Qt.ItemDataRole.DisplayRole
         ):
-            return TABLE_HEADERS[section]
+            return COLUMN_HEADERS[section]
         return None
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
@@ -169,15 +186,9 @@ class APTableModel(QAbstractTableModel):
                     return QBrush(QColor(SIG_EXCELLENT))
             return None
 
-        if role == Qt.ItemDataRole.BackgroundRole:
-            # Alternate very subtle row shading for readability
-            if index.row() % 2 == 1:
-                return (
-                    QApplication.instance()
-                    .palette()
-                    .brush(QPalette.ColorRole.AlternateBase)
-                )
-            return None
+        # Row striping is done by the views (setAlternatingRowColors): the
+        # model's row order is not the sorted order the user sees, so a
+        # model-side "row % 2" stripes the wrong rows.
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             numeric_cols = {
@@ -212,6 +223,8 @@ class APTableModel(QAbstractTableModel):
         return None
 
     def _display(self, ap: AccessPoint, col: int) -> str:
+        if col >= EXTRA_COL_START:
+            return TABLE_EXTRA_FIELDS[col - EXTRA_COL_START].fmt(ap)
         if col == COL_INUSE:
             return "▲" if ap.in_use else ""
         if col == COL_SSID:
@@ -415,7 +428,7 @@ class APFilterProxy(QSortFilterProxyModel):
             return False
         if self._text_filter:
             haystack = (
-                f"{ap.display_ssid} {ap.bssid} {ap.manufacturer} {ap.band}".lower()
+                f"{ap.display_ssid} {ap.bssid} {ap.manufacturer} {ap.band} {ap.label} {ap.ap_name}".lower()
             )
             if self._text_filter not in haystack:
                 return False
@@ -447,6 +460,13 @@ class APFilterProxy(QSortFilterProxyModel):
 
     def lessThan(self, left: QModelIndex, right: QModelIndex) -> bool:
         col = left.column()
+        if col >= EXTRA_COL_START:
+            fld = TABLE_EXTRA_FIELDS[col - EXTRA_COL_START]
+            if fld.sort is not None:
+                la = self.sourceModel().ap_at(left.row())
+                ra = self.sourceModel().ap_at(right.row())
+                if la is not None and ra is not None:
+                    return fld.sort(la) < fld.sort(ra)
         numeric = {
             COL_CHAN,
             COL_FREQ,

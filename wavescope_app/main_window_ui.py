@@ -7,6 +7,7 @@ from .core import *
 from .graphs import ChannelGraphWidget, SignalHistoryWidget
 from .ap_sidebar import APGroupSidebar
 from .known_ssids import KnownSSIDStore, KnownSSIDDialog
+from .column_view import FrozenTableView
 
 
 class MainWindowUIMixin:
@@ -92,6 +93,12 @@ class MainWindowUIMixin:
         self._btn_tools.setStyleSheet(_btn_ss())
         self._btn_tools.setToolTip("OUI database and packet capture")
         _tools_menu = QMenu(self)
+        _tools_menu.addAction("⚙  Settings…", self._on_open_settings)
+        _tools_menu.addSeparator()
+        _tools_menu.addAction("📂  Open Session…", self._on_open_session)
+        _tools_menu.addAction("💾  Save Session…", self._on_save_session)
+        _tools_menu.addAction("📄  Export CSV…", self._on_export_csv)
+        _tools_menu.addSeparator()
         _tools_menu.addAction("📖  Update OUI Database", self._on_update_oui)
         _tools_menu.addSeparator()
         _tools_menu.addAction("📡  Packet Capture…", self._on_monitor_mode)
@@ -119,6 +126,14 @@ class MainWindowUIMixin:
         self._data_source = "iw"
         self._source_actions["iw"].setChecked(True)
         self._source_group.triggered.connect(lambda a: self._on_source_change(a.data()))
+        # Keyboard shortcuts for the new actions
+        for seq, slot in (
+            ("Ctrl+,", self._on_open_settings),
+            ("Ctrl+O", self._on_open_session),
+            ("Ctrl+S", self._on_save_session),
+            ("Ctrl+E", self._on_export_csv),
+        ):
+            QShortcut(QKeySequence(seq), self, activated=slot)
         self._btn_tools.clicked.connect(
             lambda: _tools_menu.exec(
                 self._btn_tools.mapToGlobal(self._btn_tools.rect().bottomLeft())
@@ -141,7 +156,7 @@ class MainWindowUIMixin:
         self._band_combo.currentTextChanged.connect(self._on_band_change)
 
         self._search = QLineEdit()
-        self._search.setPlaceholderText("🔍  SSID / MAC / vendor…")
+        self._search.setPlaceholderText("🔍  SSID / MAC / vendor / label…")
         self._search.setFixedWidth(240)
         self._search.textChanged.connect(self._proxy.set_text)
 
@@ -172,8 +187,14 @@ class MainWindowUIMixin:
             QLabel(" Linger:"), self._linger_spin,
             self._btn_tools,
         ])
+        self._profile_combo = QComboBox()
+        self._profile_combo.addItems(self._profile_store.names())
+        self._profile_combo.setToolTip("Column profile (Settings ▸ Columns to edit)")
+        self._profile_combo.setMinimumWidth(110)
+        self._profile_combo.currentTextChanged.connect(self._on_profile_selected)
         _view_group = _make_group("VIEW", [
             self._btn_sidebar,
+            QLabel(" Columns:"), self._profile_combo,
         ])
         _filter_group = _make_group("Filters", [
             self._search,
@@ -249,13 +270,13 @@ class MainWindowUIMixin:
         self._sidebar_last_width = 180  # remembered width for collapse/expand
 
         # ── AP Table ───────────────────────────────────────────────────────
-        self._table = QTableView()
+        self._table = FrozenTableView()
         self._table.setModel(self._proxy)
         self._table.setIconSize(QSize(VENDOR_ICON_MAX_W, VENDOR_ICON_MAX_H))
         self._table.setSortingEnabled(True)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self._table.setAlternatingRowColors(False)
+        self._table.setAlternatingRowColors(True)  # striping by visible row (view side)
         self._table.verticalHeader().hide()
         hdr = self._table.horizontalHeader()
         hdr.setMinimumSectionSize(36)
@@ -303,7 +324,27 @@ class MainWindowUIMixin:
         # Track columns the user has manually resized — skip auto-fit for those
         self._user_sized_cols: set = set()
         hdr.sectionResized.connect(self._on_col_resized)
-        splitter.addWidget(self._table)
+        # Review-mode banner (shown while a saved session is displayed)
+        self._table_box = QWidget()
+        _tb_box = QVBoxLayout(self._table_box)
+        _tb_box.setContentsMargins(0, 0, 0, 0)
+        _tb_box.setSpacing(2)
+        self._review_banner = QFrame()
+        self._review_banner.setStyleSheet(
+            f"QFrame {{ background:{CAPTURE_BANNER_BG}; border-radius:4px; }}"
+            f"QLabel {{ color:{CAPTURE_BANNER_FG}; }}"
+        )
+        _rb = QHBoxLayout(self._review_banner)
+        _rb.setContentsMargins(8, 3, 8, 3)
+        self._review_label = QLabel("")
+        _rb.addWidget(self._review_label, 1)
+        _btn_live = QPushButton("▶ Resume live scanning")
+        _btn_live.clicked.connect(self._leave_review_mode)
+        _rb.addWidget(_btn_live)
+        self._review_banner.hide()
+        _tb_box.addWidget(self._review_banner)
+        _tb_box.addWidget(self._table)
+        splitter.addWidget(self._table_box)
 
         # ── First-scan overlay ─────────────────────────────────────────────
         # Shown while the table is empty (initial scan not yet complete).
@@ -347,6 +388,19 @@ class MainWindowUIMixin:
 
         self._history_graph = SignalHistoryWidget()
         self._tabs.addTab(self._history_graph, "📈  Signal History")
+        # Issues tab (configuration problems found in the current scan)
+        self._issues_table = QTableWidget(0, 5)
+        self._issues_table.setHorizontalHeaderLabels(["Severity", "Issue", "SSID", "BSSIDs", "Why it matters"])
+        self._issues_table.verticalHeader().hide()
+        self._issues_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._issues_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._issues_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._issues_table.setWordWrap(True)
+        self._issues_table.horizontalHeader().setStretchLastSection(True)
+        self._issues_table.cellClicked.connect(self._on_issue_clicked)
+        for _c, _w in enumerate((100, 240, 190, 210)):
+            self._issues_table.setColumnWidth(_c, _w)
+        self._issues_tab_index = self._tabs.addTab(self._issues_table, "⚠  Issues")
 
         # Details tab (selected AP)
         self._details_widget = QWidget()

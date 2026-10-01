@@ -7,6 +7,10 @@ from .core import *
 from .main_window_ui import MainWindowUIMixin
 from .main_window_logic import MainWindowLogicMixin
 from .known_ssids import KnownSSIDStore
+from .annotations import AnnotationStore
+from .column_profiles import ProfileStore
+from .issues import Issue
+from .main_window_logic import load_issue_settings
 
 
 class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
@@ -33,6 +37,17 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self._settings = QSettings("wavescope", "WaveScope")
 
         self._known_store = KnownSSIDStore()
+        # 2.1 features: labels, column profiles, issue checks, Find AP, sessions
+        self._annotations = AnnotationStore()
+        self._profile_store = ProfileStore(self._settings)
+        self._active_profile = "Default"
+        self._auto_hidden_cols: set = set()
+        self._issue_cfg = load_issue_settings(self._settings)
+        self._issues: List[Issue] = []
+        self._find_sound_default = True
+        self._finder = None  # FindAPDialog while open
+        self._finder_prev_interval: Optional[int] = None
+        self._review_mode = False
 
         self._model = APTableModel()
         self._proxy = APFilterProxy()

@@ -4,8 +4,6 @@
 
 ![WaveScope Screenshot](assets/screenshot.png)
 
-<sub>The screenshot may be from an older version; the current UI has more panels and columns.</sub>
-
 ---
 
 ## About
@@ -21,6 +19,7 @@ WaveScope is an open-source WiFi analyzer designed for Linux desktops. It gives 
 - 📡 **Real-time channel graph** — per-band panels (2.4 GHz / 5 GHz / 6 GHz), no dead spectrum
 - 📈 **Signal history plot** — rolling 2-minute time series per access point
 - 🔍 **Rich AP metadata** — SSID, BSSID, manufacturer (OUI), band, channel, bandwidth, signal (dBm), security, WiFi generation, channel utilization, connected clients, 802.11k/v/r roaming support
+- 🧰 **Troubleshooting tools** — Issues tab (configuration problems with explanations), side-by-side Compare, per-BSSID labels with wildcards, column profiles with pinned columns, Find AP beeper, saved sessions and CSV export; all preferences in one Settings dialog
 - 🎯 **Single source of truth** — all BSS data comes from the kernel's scan cache via `iw`, cross-checked against Wireshark; NetworkManager is only asked to trigger scans (Tools ▸ Data Source keeps the legacy NetworkManager + iw mode)
 - 🧭 **RF analysis** — per-channel congestion score, HE BSS-color collision alerts, roam candidates for the connected SSID, SNR and per-antenna RSSI for the current link
 - 📶 **Wi-Fi 6E / 7 detail** — 6 GHz PSC markers and AP power type (LPI/SP/VLP), 320 MHz channels, EHT puncturing drawn on the graph, multi-link (MLD) grouping, co-located 6 GHz APs from the Reduced Neighbor Report
