@@ -48,6 +48,7 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self._finder = None  # FindAPDialog while open
         self._finder_prev_interval: Optional[int] = None
         self._review_mode = False
+        self._state_note = ""  # scanner state note (no interface / no NetworkManager)
 
         self._model = APTableModel()
         self._proxy = APFilterProxy()
@@ -81,6 +82,7 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self._restore_settings()
         self._start_scanner()
         self._status("Scanning…")
-        # First-run OUI prompt (only if IEEE JSON not yet downloaded)
+        # First run (no IEEE OUI JSON yet): offer the download in a banner —
+        # never a modal dialog, so the first window is always the main window.
         if not OUI_JSON_PATH.exists():
-            QTimer.singleShot(800, self._prompt_oui_download)
+            self._oui_banner.show()

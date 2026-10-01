@@ -343,6 +343,42 @@ class MainWindowUIMixin:
         _rb.addWidget(_btn_live)
         self._review_banner.hide()
         _tb_box.addWidget(self._review_banner)
+        # Optional-tools notice (dismissable; neutral wording — see tool_notices)
+        self._notice_banner = QFrame()
+        self._notice_banner.setStyleSheet(
+            f"QFrame {{ background:{CAPTURE_WARN_BG}; border-radius:4px; }}"
+            f"QLabel {{ color:{CAPTURE_WARN_FG}; }}"
+        )
+        _nb = QHBoxLayout(self._notice_banner)
+        _nb.setContentsMargins(8, 3, 8, 3)
+        self._notice_label = QLabel("")
+        self._notice_label.setWordWrap(True)
+        _nb.addWidget(self._notice_label, 1)
+        _btn_dismiss = QPushButton("Dismiss")
+        _btn_dismiss.clicked.connect(self._notice_banner.hide)
+        _nb.addWidget(_btn_dismiss)
+        self._notice_banner.hide()
+        _tb_box.addWidget(self._notice_banner)
+        # First-run vendor-database offer (replaces the former modal dialog)
+        self._oui_banner = QFrame()
+        self._oui_banner.setStyleSheet(
+            f"QFrame {{ background:{CAPTURE_BANNER_BG}; border-radius:4px; }}"
+            f"QLabel {{ color:{CAPTURE_BANNER_FG}; }}"
+        )
+        _ob = QHBoxLayout(self._oui_banner)
+        _ob.setContentsMargins(8, 3, 8, 3)
+        _ob.addWidget(QLabel(
+            "📖  Vendor names come from the bundled list. Download the full IEEE OUI database "
+            "(about 4 MB, stored locally) for better manufacturer coverage."
+        ), 1)
+        _btn_oui_dl = QPushButton("Download…")
+        _btn_oui_dl.clicked.connect(self._on_first_run_oui_download)
+        _ob.addWidget(_btn_oui_dl)
+        _btn_oui_later = QPushButton("Later")
+        _btn_oui_later.clicked.connect(self._oui_banner.hide)
+        _ob.addWidget(_btn_oui_later)
+        self._oui_banner.hide()
+        _tb_box.addWidget(self._oui_banner)
         _tb_box.addWidget(self._table)
         splitter.addWidget(self._table_box)
 
@@ -367,12 +403,12 @@ class MainWindowUIMixin:
             "background:transparent; border:none;"
         )
         _ov_layout.addWidget(self._scan_overlay_lbl)
-        _ov_sub = QLabel("First scan runs a full sweep — this may take a few seconds.")
-        _ov_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        _ov_sub.setStyleSheet(
+        self._scan_overlay_sub = QLabel("First scan runs a full sweep — this may take a few seconds.")
+        self._scan_overlay_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._scan_overlay_sub.setStyleSheet(
             f"color:{SCAN_OVERLAY_SUB}; font-size:11px; background:transparent; border:none;"
         )
-        _ov_layout.addWidget(_ov_sub)
+        _ov_layout.addWidget(self._scan_overlay_sub)
         self._scan_overlay.setGeometry(self._table.rect())
         self._scan_overlay.raise_()
         self._table.installEventFilter(self)

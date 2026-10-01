@@ -346,14 +346,25 @@ class MainWindowLogicMixin:
         ts = time.strftime("%H:%M:%S")
         self._lbl_updated.setText(f"  Last scan: {ts}  ")
         msg = f"Found {total} access points  |  Showing {shown}"
+        note = getattr(self, "_state_note", "")
+        if note:
+            msg += f"  |  {note}"
         if self._color_collisions:
             n = len(self._color_collisions)
             msg += f"  |  ⚠ BSS color collision on {n} BSS{'s' if n != 1 else ''} (see Details)"
         self.statusBar().showMessage(msg)
         self._show_connection()
-        # Hide the first-scan overlay once data arrives for the first time
-        if hasattr(self, "_scan_overlay") and self._scan_overlay.isVisible():
-            self._scan_overlay.hide()
+        # Hide the first-scan overlay once data arrives; keep it (with the
+        # state note) while there is nothing to show and a note explains why.
+        if hasattr(self, "_scan_overlay"):
+            if aps or not note:
+                self._scan_overlay.hide()
+            else:
+                self._scan_overlay_lbl.setText(note)
+                self._scan_overlay_sub.hide()
+                self._scan_overlay.setGeometry(self._table.rect())
+                self._scan_overlay.show()
+                self._scan_overlay.raise_()
 
     def _on_theme_change(self, idx: int):
         modes = ["dark", "light", "auto"]
@@ -506,7 +517,33 @@ class MainWindowLogicMixin:
         self._scanner.data_ready.connect(self._on_data)
         self._scanner.scan_error.connect(self._on_error)
         self._scanner.source_active.connect(self._on_source_active)
+        self._scanner.status_note.connect(self._on_status_note)
         self._scanner.start()
+
+    def show_tool_notices(self, notes: List[str]) -> None:
+        """Show absent-optional-tool notes in the in-window banner."""
+        if not notes:
+            self._notice_banner.hide()
+            return
+        self._notice_label.setText("ℹ  " + "  ·  ".join(notes))
+        self._notice_banner.show()
+
+    def _on_status_note(self, text: str) -> None:
+        """Neutral scanner state (no interface / no NetworkManager).
+
+        Kept in _state_note so _on_data can show it in the status bar and,
+        while the table is empty, in the overlay instead of "Scanning…".
+        """
+        self._state_note = text
+        if hasattr(self, "_scan_overlay"):
+            self._scan_overlay_lbl.setText(text or "Scanning for networks…")
+            self._scan_overlay_sub.setVisible(not text)  # the "first sweep" hint only applies while scanning
+            if text and not self._aps:
+                self._scan_overlay.setGeometry(self._table.rect())
+                self._scan_overlay.show()
+                self._scan_overlay.raise_()
+        if text:
+            self.statusBar().showMessage(text)
 
     def _on_source_change(self, source: str) -> None:
         """Switch data source: restart the scanner and drop per-BSS caches,
@@ -1592,10 +1629,12 @@ class MainWindowLogicMixin:
                     return True
         return super().eventFilter(obj, event)
 
-    def _prompt_oui_download(self):
+    def _on_first_run_oui_download(self):
+        """Banner button: run the download dialog, hide the banner on success."""
         dlg = OuiDownloadDialog(self, first_run=True)
         dlg.exec()
         if dlg.downloaded:
+            self._oui_banner.hide()
             self._after_oui_update()
 
     def _on_update_oui(self):

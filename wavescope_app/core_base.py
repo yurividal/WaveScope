@@ -271,9 +271,18 @@ def _find_binary(name: str, extra_dirs: Tuple[str, ...] = ()) -> str:
 _SBIN_DIRS = ("/usr/sbin", "/sbin")
 
 NMCLI_BIN = _find_binary("nmcli", _SBIN_DIRS)
-IW_BIN = _find_binary("iw", _SBIN_DIRS)
+HOST_IW_BIN = _find_binary("iw", _SBIN_DIRS)
+# The AppImage ships its own iw (version matching the parser's text
+# expectations); the launcher points WAVESCOPE_BUNDLED_IW at it.  Packet
+# capture runs iw as root on the host and keeps using HOST_IW_BIN.
+_bundled_iw = os.environ.get("WAVESCOPE_BUNDLED_IW", "")
+IW_BIN = _bundled_iw if _bundled_iw and os.access(_bundled_iw, os.X_OK) else HOST_IW_BIN
 TCPDUMP_BIN = _find_binary("tcpdump", _SBIN_DIRS)
 PKEXEC_BIN = _find_binary("pkexec", _SBIN_DIRS)
+
+
+def _tool_ok(path: str) -> bool:
+    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
 
 # Tools required for full functionality, checked at startup so the user gets
 # an explicit warning instead of features silently degrading.
@@ -308,9 +317,37 @@ def find_missing_tools() -> List[Tuple[str, str]]:
     """Return (name, impact) for each required tool not found on disk."""
     missing = []
     for name, resolved, impact in REQUIRED_TOOLS:
-        if not (os.path.isfile(resolved) and os.access(resolved, os.X_OK)):
+        if not _tool_ok(resolved):
             missing.append((name, impact))
     return missing
+
+
+def can_scan_at_all() -> bool:
+    """True when at least one scan data source can work (iw or nmcli)."""
+    return _tool_ok(IW_BIN) or _tool_ok(NMCLI_BIN)
+
+
+def tool_notices() -> List[str]:
+    """Short, neutral notes about optional host tools that are absent.
+
+    Shown in an in-window banner (not a modal dialog) so a system without
+    NetworkManager or tcpdump still gets a normal main window.  Wording
+    deliberately avoids error vocabulary — automated screenshot checks (e.g.
+    the AppImage catalog's) treat phrases like "not found" or "not installed"
+    as crash messages.
+    """
+    notes: List[str] = []
+    if not _tool_ok(NMCLI_BIN):
+        notes.append(
+            "NetworkManager (nmcli) is absent: WaveScope reads the kernel's scan cache and "
+            "scans refresh only when the system itself scans."
+        )
+    if not _tool_ok(HOST_IW_BIN) and _tool_ok(IW_BIN):
+        notes.append("The host has no iw; the bundled iw is used for scanning. Packet capture needs the host's iw.")
+    capture_missing = [n for n, p in (("tcpdump", TCPDUMP_BIN), ("pkexec", PKEXEC_BIN)) if not _tool_ok(p)]
+    if capture_missing:
+        notes.append(f"Packet capture needs {' and '.join(capture_missing)} on the host.")
+    return notes
 
 
 def warn_missing_tools_and_confirm(missing: List[Tuple[str, str]]) -> bool:

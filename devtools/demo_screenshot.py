@@ -213,8 +213,8 @@ def main() -> int:
 
     # No scanning, no first-run OUI prompt.
     MainWindow._start_scanner = lambda self: None
-    MainWindow._prompt_oui_download = lambda self: None
     mw = MainWindow()
+    mw._oui_banner.hide()  # the demo scene has its own vendor data
     mw.resize(1720, 1010)
     mw._annotations.set("e8:0a:b9:c7:22:4*", "3F East · Room 312")
     mw._annotations.set("e8:0a:b9:c7:25:c*", "Lobby")

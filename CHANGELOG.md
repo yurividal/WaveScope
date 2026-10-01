@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### AppImage: self-contained scanning
+- **iw is bundled** (built from the iw 6.17 release, the version the parser follows; Ubuntu 22.04's packaged 5.16 predates Wi-Fi 7 decoding) together with libnl. The AppImage scans on hosts without iw; packet capture still uses the host's iw, tcpdump and pkexec, since root cannot read the user's AppImage mount.
+- **No startup dialog for optional tools** — a system without NetworkManager, tcpdump or pkexec now gets the normal main window plus a dismissable in-window notice. The blocking dialog remains only when nothing can scan at all (neither iw nor nmcli).
+- **Neutral state messages** — "No Wi-Fi interface detected" and "NetworkManager is absent" are shown as status notes instead of scanner errors, and the empty-table overlay explains the state. Wording is checked by a test against the AppImage catalog's screenshot error regexes, and the Xvfb launch test now requires the main window without any dialog on a bare host and verifies the bundled iw runs.
+
 ## v2.1.2 — 2026-10-01
 
 ### Verified against IEEE Std 802.11-2024 (the three questions the spec review left open)

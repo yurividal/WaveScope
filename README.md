@@ -132,8 +132,8 @@ chmod +x WaveScope-*-x86_64.AppImage
 ```
 
 Notes:
-- The AppImage bundles Python, PyQt6, pyqtgraph and numpy. It is built on Ubuntu 22.04 and needs glibc 2.35 or newer.
-- `nmcli`, `iw`, `tcpdump` and `pkexec` still have to be installed on the host.
+- The AppImage bundles Python, PyQt6, pyqtgraph, numpy and `iw` (6.17). It is built on Ubuntu 22.04 and needs glibc 2.35 or newer.
+- Scanning works without any host tools. NetworkManager (`nmcli`) is only used to trigger fresh scans; without it the app shows the kernel's scan cache. Packet capture needs the host's `iw`, `tcpdump` and `pkexec`.
 
 ---
 

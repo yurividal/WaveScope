@@ -110,6 +110,8 @@ BUNDLE_LIBS=(
     libxkbcommon.so.0
     libxkbcommon-x11.so.0
     libgthread-2.0.so.0
+    libnl-3.so.200
+    libnl-genl-3.so.200
 )
 MISSING_LIBS=()
 for lib in "${BUNDLE_LIBS[@]}"; do
@@ -125,8 +127,32 @@ if [ "${#MISSING_LIBS[@]}" -gt 0 ]; then
     echo "       Install: libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1"
     echo "                libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-util1"
     echo "                libxcb-xkb1 libxkbcommon0 libxkbcommon-x11-0 libglib2.0-0"
+    echo "                libnl-3-200 libnl-genl-3-200"
     exit 1
 fi
+
+# ── 3d. Bundle iw (built from source) ──────────────────────────────────────
+# WaveScope's parser follows iw's current text format (Wi-Fi 7 / 6 GHz
+# elements were added in iw 6.x); Ubuntu 22.04 ships iw 5.16, so the build
+# host's package is not usable.  Build the release matching the parser from
+# kernel.org and ship it in the AppImage ("one app = one file", as the
+# AppImage catalog requires).  Packet capture still runs the *host* iw as
+# root (a root process cannot read the user's FUSE mount).
+IW_VERSION="6.17"
+IW_SHA256="7d182e498289ab39b257da6780d562e415377107f50358ee5b55b8cfe40b1e33"
+IW_URL="https://www.kernel.org/pub/software/network/iw/iw-${IW_VERSION}.tar.xz"
+IW_SRC="$BUILD_DIR/iw-src"
+mkdir -p "$IW_SRC"
+if [ -n "${WAVESCOPE_IW_TARBALL:-}" ] && [ -f "$WAVESCOPE_IW_TARBALL" ]; then
+    cp "$WAVESCOPE_IW_TARBALL" "$IW_SRC/iw.tar.xz"
+else
+    wget -qO "$IW_SRC/iw.tar.xz" "$IW_URL"
+fi
+echo "${IW_SHA256}  $IW_SRC/iw.tar.xz" | sha256sum -c - >/dev/null
+tar -xJf "$IW_SRC/iw.tar.xz" -C "$IW_SRC"
+make -C "$IW_SRC/iw-${IW_VERSION}" -j"$(nproc)" >/dev/null
+install -m 0755 "$IW_SRC/iw-${IW_VERSION}/iw" "$APPDIR/usr/bin/iw"
+"$APPDIR/usr/bin/iw" --version
 
 # ── 4. Internal launcher ─────────────────────────────────────────────────────
 cat > "$APPDIR/usr/bin/${APP_ID}" <<'EOF'
@@ -141,6 +167,9 @@ PY_SITE="$(echo "$APP_PREFIX/.venv/lib/python"*/site-packages)"
 # Python/libraries never leak into host tools.
 export WAVESCOPE_APPIMAGE=1
 export WAVESCOPE_HOST_LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+# Bundled iw (version matching the parser); the host's iw is still used for
+# packet capture, which runs as root outside the AppImage mount.
+export WAVESCOPE_BUNDLED_IW="$APPDIR/usr/bin/iw"
 export PYTHONHOME="$APP_PREFIX/python-runtime"
 export PYTHONPATH="$PY_SITE"
 export LD_LIBRARY_PATH="$APP_PREFIX/python-runtime/lib:$APP_PREFIX/python-runtime/lib64:${LD_LIBRARY_PATH:-}"

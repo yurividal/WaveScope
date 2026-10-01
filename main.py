@@ -36,7 +36,7 @@ import pyqtgraph as pg
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import QApplication
 
-from wavescope_app.core import APP_NAME, find_missing_tools, warn_missing_tools_and_confirm
+from wavescope_app.core import APP_NAME, can_scan_at_all, find_missing_tools, tool_notices, warn_missing_tools_and_confirm
 from wavescope_app.main_window import MainWindow
 from wavescope_app.theme import _dark_palette, GRAPH_BG_DARK, GRAPH_AXIS_DARK
 
@@ -61,11 +61,13 @@ def main():
 
     app.setPalette(_dark_palette())
 
-    # WAVESCOPE_SKIP_DEPENDENCY_CHECK=1 is for automated tests (e.g. the Xvfb
-    # AppImage test), which need the main window even without nmcli/iw.
-    missing = [] if os.environ.get("WAVESCOPE_SKIP_DEPENDENCY_CHECK") == "1" else find_missing_tools()
-    if missing and not warn_missing_tools_and_confirm(missing):
-        sys.exit(1)
+    # Only when no data source can work at all is a blocking dialog shown;
+    # absent optional tools (NetworkManager, tcpdump, pkexec) are reported in
+    # an in-window notice so the app always opens with its normal window.
+    if not can_scan_at_all():
+        missing = find_missing_tools()
+        if missing and not warn_missing_tools_and_confirm(missing):
+            sys.exit(1)
 
     for name in ("Inter", "Segoe UI", "Ubuntu", "Noto Sans", "DejaVu Sans"):
         font = QFont(name, 10)
@@ -75,6 +77,7 @@ def main():
     app.setFont(font)
 
     win = MainWindow()
+    win.show_tool_notices(tool_notices())
     win.showMaximized()
     sys.exit(app.exec())
 

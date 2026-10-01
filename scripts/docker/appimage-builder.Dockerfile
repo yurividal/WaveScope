@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
     libxcb-render-util0 libxcb-render0 libxcb-shape0 libxcb-util1 \
     libxcb-xkb1 libxkbcommon0 libxkbcommon-x11-0 libglib2.0-0 \
+    # building the bundled iw (see build_appimage.sh 3d)
+    gcc libc6-dev make pkg-config libnl-3-dev libnl-genl-3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN wget -qO /opt/appimagetool.AppImage "$APPIMAGETOOL_URL" \

@@ -1859,6 +1859,7 @@ class WiFiScanner(QThread):
     data_ready = pyqtSignal(list)  # list[AccessPoint]
     scan_error = pyqtSignal(str)
     source_active = pyqtSignal(str)  # data source actually used this cycle
+    status_note = pyqtSignal(str)  # neutral state description (no interface, no NM, …)
 
     # Data sources
     SOURCE_IW = "iw"  # kernel scan cache via iw (single source of truth)
@@ -1928,8 +1929,29 @@ class WiFiScanner(QThread):
             # start-up; afterwards rescans follow NM's ~10 s rate limit.
             now = time.monotonic()
             do_rescan = (now - last_rescan) >= self._RESCAN_MIN_INTERVAL_S or cycle == 2
+            iw_ok = os.path.isfile(IW_BIN) and os.access(IW_BIN, os.X_OK)
+            nm_ok = os.path.isfile(NMCLI_BIN) and os.access(NMCLI_BIN, os.X_OK)
             try:
+                if iw_ok and not _detect_wifi_ifaces():
+                    # Nothing to scan with: a plain state, not an error.
+                    self._emit_note("No Wi-Fi interface detected — connect or enable a wireless adapter.")
+                    self.data_ready.emit(self._merge_linger([]))
+                    cycle += 1
+                    self._stop_event.wait(max(self._interval, 2))
+                    continue
+                if not iw_ok and not nm_ok:
+                    self._emit_note("No scan data source available: neither iw nor NetworkManager is present.")
+                    cycle += 1
+                    self._stop_event.wait(max(self._interval, 2))
+                    continue
                 if self._source == self.SOURCE_IW and self._iw_usable():
+                    if not nm_ok:
+                        self._emit_note(
+                            "Showing the kernel's scan cache; NetworkManager is absent, so scans refresh "
+                            "only when the system itself scans."
+                        )
+                    else:
+                        self._emit_note("")
                     if do_rescan:
                         self._trigger_rescan()
                         last_rescan = time.monotonic()
@@ -1953,8 +1975,8 @@ class WiFiScanner(QThread):
             except ScanCancelled:
                 break
             except FileNotFoundError:
-                self.scan_error.emit("nmcli not found — is NetworkManager installed?")
-                break
+                self._emit_note("NetworkManager (nmcli) is absent and iw is unavailable; nothing to scan with.")
+                self._stop_event.wait(max(self._interval, 5))
             except subprocess.TimeoutExpired:
                 self.scan_error.emit("nmcli timed out")
             except Exception as e:
@@ -1963,6 +1985,12 @@ class WiFiScanner(QThread):
             cycle += 1
             # Interruptible sleep: stop() wakes this immediately.
             self._stop_event.wait(self._interval)
+
+    def _emit_note(self, text: str) -> None:
+        """Emit status_note only when the text changes (keeps the GUI quiet)."""
+        if text != getattr(self, "_last_note", None):
+            self._last_note = text
+            self.status_note.emit(text)
 
     def _merge_linger(self, aps: List[AccessPoint]) -> List[AccessPoint]:
         """Append recently-vanished APs (dimmed) and return private copies."""

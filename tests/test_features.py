@@ -235,3 +235,27 @@ def test_settings_dialog_applies_values(monkeypatch):
     # an invalid label pattern blocks Apply
     dlg._add_label_row("not-a-mac", "x")
     assert not dlg._apply()
+
+
+def test_notice_wording_is_not_error_like():
+    """The AppImage catalog OCRs the first screenshot and fails the app when
+    the text matches these regexes (appimage.github.io code/check-screenshot.sh).
+    Our optional-tool notices and scanner state notes must stay clear of them."""
+    import re
+
+    from wavescope_app import core_base, core_scanner
+    hard = re.compile(
+        r"traceback|exception|segmentation fault|fatal|error while loading|glibc|not installed|"
+        r"cannot open display|permission denied|no such file|could not (load|find|open|start|initiali)|"
+        r"failed to (load|start|open|initiali|create)|cannot (load|find|open|execute|configure)|"
+        r"unable to (load|find|open|start)|command not found|core dumped", re.I)
+    soft = re.compile(r"error|failed|failure|could not|cannot|unable to|not found", re.I)
+    # every notice string regardless of which tools exist on this machine
+    src = open(core_base.__file__, encoding="utf-8").read() + open(core_scanner.__file__, encoding="utf-8").read()
+    notes = re.findall(r'_emit_note\(\s*"([^"]+)"', src) + re.findall(r'notes\.append\(\s*f?"([^"]+)"', src)
+    notes += re.findall(r'_emit_note\(\s*\n\s*"([^"]+)"\s*\n\s*"([^"]+)"', src) and [
+        "".join(t) for t in re.findall(r'_emit_note\(\s*\n\s*"([^"]+)"\s*\n\s*"([^"]+)"', src)
+    ]
+    assert notes, "no notice strings found"
+    bad = [n for n in notes if hard.search(n) or soft.search(n)]
+    assert not bad, bad
