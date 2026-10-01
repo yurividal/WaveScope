@@ -521,8 +521,12 @@ def _parse_rnr(raw: bytes) -> List[Dict[str, object]]:
 def _parse_rates(section_texts: List[str]) -> Tuple[List[float], List[float]]:
     """(all rates, basic rates) in Mbps from Supported/Extended rates IEs.
 
-    iw marks basic rates with '*' and prints BSS-membership selectors as the
-    literal tokens "HT"/"VHT", which are skipped.
+    iw marks basic rates with '*'.  BSS-membership selectors share the rate
+    octet space (hostap BSS_MEMBERSHIP_SELECTOR_*: 120 UHR, 121 EHT, 122 HE,
+    123 SAE-H2E-only, 124 EPD, 125 GLK, 126 VHT, 127 HT); iw prints 126/127
+    as "VHT"/"HT" but the others as pseudo-rates "60.0*" … "62.5*" (iw
+    scan.c print_supprates).  Real 802.11 rates never exceed 54 Mbps, so
+    anything ≥ 60 is a selector and is skipped.
     """
     rates: List[float] = []
     basic: List[float] = []
@@ -532,34 +536,74 @@ def _parse_rates(section_texts: List[str]) -> Tuple[List[float], List[float]]:
             if not m:
                 continue
             r = float(m.group(1))
+            if r >= 60.0:
+                continue  # BSS membership selector, not a rate
             rates.append(r)
             if m.group(2):
                 basic.append(r)
     return rates, basic
 
 
-def _summarise_country(text: str) -> Tuple[str, str, str]:
-    """(country code, environment, power-limit summary) from the Country IE."""
+# 6 GHz operating classes (802.11ax Annex E Table E-4): 131-135 20-160 MHz,
+# 136 ch 2, 137 320 MHz.  A Regulatory Class line with one of these means the
+# following sub-band triplets are 6 GHz channels.
+_6GHZ_REG_CLASSES = frozenset(range(131, 138))
+
+
+def _summarise_country(text: str, bss_band: str = "") -> Tuple[str, str, str]:
+    """(country code, environment, power-limit summary) from the Country IE.
+
+    Environment: iw prints the Country String's third octet as "Indoor only"
+    / "Outdoor only" / "Indoor/Outdoor" and everything else as "bogus".  A
+    Country element that carries Table E-4 operating triplets sets that
+    octet to 0x04 (802.11-2020 9.4.2.8 — not verifiable from local sources);
+    every 6 GHz-capable AP does, so "bogus" together with a Regulatory Class
+    line is reported as the global (Table E-4) encoding, not an error.
+
+    Triplets: iw computes the end channel of a sub-band triplet as
+    first + (n-1) when first ≤ 14 and first + 4·(n-1) otherwise (iw scan.c
+    print_country).  6 GHz channels start at 1 but are 4 apart, so a 6 GHz
+    triplet starting at ch 1-13 is printed with the wrong end channel (e.g.
+    [1 - 24] for 24 channels = ch 1-93); it is recomputed here when the
+    triplet belongs to a 6 GHz regulatory class (or the BSS itself is 6 GHz).
+
+    Adjacent triplets with the same power are merged only when their channel
+    ranges are contiguous (step 1 on 2.4 GHz, 4 above), so [36-64]@30 and
+    [149-165]@30 stay two ranges rather than "36–165".
+    """
     first_line = (text or "").split("\n", 1)[0]
     cc_m = re.search(r"\b([A-Z]{2})\b", first_line)
     env_m = re.search(r"Environment:\s*(.+)", first_line)
-    triplets = re.findall(r"Channels \[(\d+) - (\d+)\] @ (-?\d+) dBm", text or "")
-    # Merge adjacent triplets with the same limit into ranges: "36–48 30 dBm"
-    runs: List[List[int]] = []
-    for lo, hi, pwr in triplets:
-        lo_i, hi_i, p = int(lo), int(hi), int(pwr)
-        if runs and runs[-1][2] == p:
-            runs[-1][1] = hi_i
+    env = env_m.group(1).strip() if env_m else ""
+    has_reg_class = "Regulatory Class:" in (text or "")
+    if env == "bogus":
+        env = "Global (Table E-4 operating classes)" if has_reg_class else "Unknown"
+
+    runs: List[List[int]] = []  # [lo, hi, power, step]
+    six_ghz = bss_band == "6 GHz"
+    for line in (text or "").splitlines():
+        rc = re.search(r"Regulatory Class:\s*(\d+)", line)
+        if rc:
+            six_ghz = int(rc.group(1)) in _6GHZ_REG_CLASSES
+            continue
+        m = re.search(r"Channels \[(\d+) - (\d+)\] @ (-?\d+) dBm", line)
+        if not m:
+            continue
+        lo, hi, p = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if six_ghz:
+            if lo <= 14:  # iw used step 1; recover n and apply the 6 GHz step
+                hi = lo + 4 * (hi - lo)
+            step = 4
         else:
-            runs.append([lo_i, hi_i, p])
+            step = 1 if lo <= 14 else 4
+        if runs and runs[-1][2] == p and runs[-1][3] == step and lo == runs[-1][1] + step:
+            runs[-1][1] = hi
+        else:
+            runs.append([lo, hi, p, step])
     parts = [
-        (f"ch {lo}" if lo == hi else f"ch {lo}–{hi}") + f": {p} dBm" for lo, hi, p in runs
+        (f"ch {lo}" if lo == hi else f"ch {lo}–{hi}") + f": {p} dBm" for lo, hi, p, _ in runs
     ]
-    return (
-        cc_m.group(1) if cc_m else "",
-        env_m.group(1).strip() if env_m else "",
-        "; ".join(parts),
-    )
+    return cc_m.group(1) if cc_m else "", env, "; ".join(parts)
 
 
 def _unescape_iw_ssid(text: str) -> str:
@@ -875,7 +919,8 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
             d[f"{prefix}_group_cipher"] = g.group(1) if g else ""
             d[f"{prefix}_pairwise"] = tuple(pw.group(1).split()) if pw else ()
             d[f"{prefix}_akm_suites"] = _akm_suites(ak.group(1)) if ak else ()
-        grp_mgmt = re.search(r"Group mgmt cipher:\s*(\S+)", rsn)
+        # iw scan.c print_rsn_ie: "\t * Group mgmt cipher suite: BIP-GMAC-256"
+        grp_mgmt = re.search(r"Group mgmt cipher suite:\s*(\S+)", rsn)
         if grp_mgmt:
             d["group_mgmt_cipher"] = grp_mgmt.group(1)
         # WPA3 "RSN Element Override" (Wi-Fi Alliance compatibility mode):
@@ -914,9 +959,15 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
                 d["owe_transition_ssid"] = os_.group(1).strip()
 
         # ── Power: TPC report, Power Constraint, Transmit Power Envelope ─
+        # The TPC Report "Transmit Power" field is a signed octet
+        # (802.11-2020 9.4.2.17); iw prints it as unsigned (scan.c
+        # print_tpcreport "%d" of a uint8), so 128-255 are negative values.
         tpc = _re_int(r"TX power:\s*(-?\d+)\s*dBm", _first(ies, "TPC report"))
         if tpc is not None:
-            d["tpc_tx_power_dbm"] = tpc
+            if tpc > 127:
+                tpc -= 256
+            if -20 <= tpc <= 40:  # anything else is vendor garbage, not a power
+                d["tpc_tx_power_dbm"] = tpc
         pc = _re_int(r"(\d+)\s*dB", _first(ies, "Power constraint"))
         if pc is not None:
             d["power_constraint_db"] = pc
@@ -931,10 +982,19 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
         # ── Supported rates (legacy/basic rates) ─────────────────────────
         rates, basic = _parse_rates(ies.get("Supported rates", []) + ies.get("Extended supported rates", []))
         d["max_legacy_rate"] = max(rates) if rates else 0.0
-        ht_idx = re.search(r"HT (?:TX/)?RX MCS rate indexes supported:\s*(?:[\d, -]*?)(\d+)\s*$", ht_caps, re.MULTILINE)
-        if ht_idx and int(ht_idx.group(1)) <= 31:
-            d["ht_max_mcs_index"] = int(ht_idx.group(1))
-            d["ht_sgi"] = bool(re.search(r"RX HT(20|40) SGI", ht_caps))
+        # iw util.c print_mcs_index prints ranges, e.g. "0-15, 32".  MCS 32 is
+        # the 40 MHz duplicate (6 Mbps) mode, not a higher rate, so the
+        # maximum is taken over indices ≤ 31 only.
+        ht_line = re.search(r"HT (?:TX/)?RX MCS rate indexes supported:\s*([\d, -]+)", ht_caps)
+        if ht_line:
+            idx = [
+                int(b or a)
+                for a, b in re.findall(r"(\d+)(?:-(\d+))?", ht_line.group(1))
+                if int(b or a) <= 31
+            ]
+            if idx:
+                d["ht_max_mcs_index"] = max(idx)
+                d["ht_sgi"] = bool(re.search(r"RX HT(20|40) SGI", ht_caps))
         if vht_valid:
             vht_rx = vht_caps.split("VHT TX MCS set")[0]
             vpairs = _mcs_nss(vht_rx)
@@ -960,7 +1020,7 @@ def parse_iw_scan(output: str) -> Dict[str, dict]:
 
         # ── Country (802.11d) ────────────────────────────────────────────
         if "Country" in ies:
-            cc, env_txt, pwr = _summarise_country(_first(ies, "Country"))
+            cc, env_txt, pwr = _summarise_country(_first(ies, "Country"), band)
             if cc:
                 d["country"] = cc
             if env_txt:
@@ -1001,9 +1061,9 @@ def _akm_label(suites: Tuple[str, ...]) -> str:
     has = lambda *names: any(n in s for n in names)  # noqa: E731
     if has("OWE"):
         label = "OWE (Enhanced Open)"
-    elif has("802.1X/SUITE-B-192", "802.1X/SUITE-B"):
+    elif has("802.1X/SUITE-B-192", "FT/802.1X/SHA-384"):
         label = "Enterprise 192-bit (Suite B)"
-    elif has("802.1X", "FT/802.1X", "802.1X/SHA-256", "FT/802.1X/SHA-384", "FILS/SHA-256", "FILS/SHA-384"):
+    elif has("802.1X", "FT/802.1X", "802.1X/SHA-256", "802.1X/SUITE-B", "FILS/SHA-256", "FILS/SHA-384"):
         label = "Enterprise (802.1X)"
     elif has("SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY") and has("PSK", "FT/PSK", "PSK/SHA-256"):
         label = "WPA2+WPA3 (PSK+SAE)"

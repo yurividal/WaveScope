@@ -221,18 +221,25 @@ class AccessPoint:
                 akms.add("802.1X")
             if "wpa-eap-suite-b-192" in rsn_tokens:
                 akms.add("802.1X/SUITE-B-192")
-            if "owe" in rsn_tokens:
+            # nmcli emits the same "owe" RSN flag for OWE and for the *open*
+            # side of an OWE transition pair (devices.c
+            # ap_wpa_rsn_flags_to_string: OWE | OWE_TM); only the SECURITY
+            # column tells them apart ("OWE" vs "OWE-TM").
+            if "owe" in rsn_tokens and "OWE-TM" not in sec_tokens:
                 akms.add("OWE")
 
-        has_rsn = self.has_rsn_ie or bool(rsn_tokens - {"(none)", "--"}) or bool(
-            sec_tokens & {"WPA2", "WPA3"}
-        )
+        # The open side of an OWE transition pair has no RSN IE even though
+        # nmcli reports the "owe" flag for it; don't count that flag as RSN.
+        ignored = {"(none)", "--"} | ({"owe"} if "OWE-TM" in sec_tokens else set())
+        has_rsn = self.has_rsn_ie or bool(rsn_tokens - ignored) or bool(sec_tokens & {"WPA2", "WPA3"})
         has_wpa1 = self.has_wpa1_ie or bool(wpa_tokens - {"(none)", "--"}) or "WPA1" in sec_tokens
 
         if "WEP" in sec_tokens:
             return "WEP"
         if "OWE" in akms or "OWE" in sec_tokens:
             return "OWE"
+        if "OWE-TM" in sec_tokens and not akms:
+            return "Open (OWE transition)"  # open side of an OWE transition pair
         if not has_rsn and not has_wpa1:
             if "OWE-TM" in sec_tokens or self.owe_transition_bssid:
                 return "Open (OWE transition)"
@@ -240,9 +247,12 @@ class AccessPoint:
 
         personal_psk = bool(akms & {"PSK", "FT/PSK", "PSK/SHA-256", "PSK/SHA-384", "FT/PSK/SHA-384"})
         personal_sae = bool(akms & {"SAE", "FT/SAE", "SAE-EXT-KEY", "FT/SAE-EXT-KEY"})
-        ent_192 = bool(akms & {"802.1X/SUITE-B-192", "802.1X/SUITE-B", "FT/802.1X/SHA-384"})
+        # AKM 12 (Suite-B-192) and 13 (FT, SHA-384) are WPA3-Enterprise 192-bit;
+        # AKM 11 (Suite-B, 128-bit) is ordinary Enterprise (hostap wpa_common.h).
+        ent_192 = bool(akms & {"802.1X/SUITE-B-192", "FT/802.1X/SHA-384"})
+        ent_plain_extra = "802.1X/SUITE-B" in akms
         ent_sha256 = "802.1X/SHA-256" in akms
-        ent_plain = bool(akms & {"802.1X", "FT/802.1X", "FILS/SHA-256", "FILS/SHA-384"})
+        ent_plain = ent_plain_extra or bool(akms & {"802.1X", "FT/802.1X", "FILS/SHA-256", "FILS/SHA-384"})
 
         if ent_192:
             return "WPA3 (802.1X-192)"

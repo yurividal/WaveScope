@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixes — wrong data found in a spec review against iw, hostap, Wireshark and nmcli sources
+- **Impossible 60-63 Mbps "rates" on Wi-Fi 6E/7 APs** — iw prints BSS membership selectors (HE, EHT, SAE-H2E-only …) as pseudo-rates such as `61.5*`; they were counted as basic/legacy rates. Real rates never exceed 54 Mbps, so selectors are now skipped.
+- **Wi-Fi 4 APs showed 54 Mbps** — an HT MCS line of `0-15, 32` was read as "max index 32" and discarded; all ranges are now parsed and MCS 32 (the 40 MHz duplicate mode) ignored, giving e.g. 144 Mbps for HT20 2SS SGI.
+- **Country IE power summary** — triplets with equal power were merged across gaps (`ch 36–165`); they now merge only when contiguous. 6 GHz triplets were printed by iw with 5 GHz-style end channels (`1–24` for channels 1–93) and are recomputed. The environment byte 0x04 (Table E-4 operating classes), shown by iw as "bogus", is now reported as "Global (Table E-4 operating classes)".
+- **Group management cipher (BIP) was never shown** — iw prints "Group mgmt cipher suite:"; the parser expected "Group mgmt cipher:".
+- **TPC / Cisco TX power of 128–255 dBm** — the Transmit Power octets are signed but iw prints them unsigned; they are now sign-converted and values outside −20…40 dBm discarded.
+- **Open side of an OWE transition pair labelled "OWE"** (NetworkManager data source only) — nmcli emits the same `owe` flag for OWE and OWE-transition; the SECURITY column's `OWE-TM` is now honoured.
+- **AKM 11 (802.1X Suite-B, 128-bit) labelled "WPA3 (802.1X-192)"** — only AKM 12 and FT-SHA-384 (13) are 192-bit.
+
 ## v2.1.0 — 2026-10-01
 
 ### New data source: the kernel scan cache via iw (single source of truth)

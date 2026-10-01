@@ -221,3 +221,69 @@ def test_iw_only_source_builds_access_points(monkeypatch):
         "Ohana", "84:78:48:EA:44:D7", True, 37, "WPA3 (SAE)",
     )
     assert ap.rsn_flags == "pair_ccmp group_ccmp sae" and ap.signal == dbm_to_nm_quality(-57)
+
+
+# ── 2.1.1 spec-review fixes (verified against iw scan.c / hostap / Wireshark) ──
+
+
+def test_membership_selectors_are_not_rates():
+    # iw prints selectors 121-125 as pseudo-rates "60.5*" … "62.5*"
+    rates, basic = sc._parse_rates(["6.0* 9.0 12.0* 18.0 24.0* 36.0 48.0 54.0 ", "61.5* "])
+    assert max(rates) == 54.0 and basic == [6.0, 12.0, 24.0]
+
+
+def test_ht_mcs_index_with_mcs32():
+    # "0-15, 32": MCS 32 is the 40 MHz duplicate mode, not a higher rate
+    blk = (
+        f"BSS 00:11:22:33:44:55(on wlan0)\n{T}freq: 2437.0\n{T}HT capabilities:\n"
+        f"{T}{T}Capabilities: 0x1ad\n{T}{T}{T}RX HT20 SGI\n{T}{T}{T}RX HT40 SGI\n"
+        f"{T}{T}HT RX MCS rate indexes supported: 0-15, 32\n"
+    )
+    d = parse_iw_scan(blk)["00:11:22:33:44:55"]
+    assert (d["ht_max_mcs_index"], d["ht_sgi"]) == (15, True)
+    assert round(sc._ht_rate_mbps(20, 15, True), 1) == 144.4
+
+
+def test_country_summary_6ghz_and_contiguity():
+    text = (
+        f" GB{T}Environment: bogus\n"
+        f"{T}{T}Extension ID: 201 Regulatory Class: 131 Coverage class: 0 (up to 0m)\n"
+        f"{T}{T}Channels [1 - 24] @ 0 dBm\n"  # iw's step-1 end channel for 24 6 GHz channels
+    )
+    cc, env, pwr = sc._summarise_country(text, "6 GHz")
+    assert (cc, env, pwr) == ("GB", "Global (Table E-4 operating classes)", "ch 1–93: 0 dBm")
+    text5 = (
+        f" US{T}Environment: Indoor/Outdoor\n"
+        f"{T}{T}Channels [36 - 64] @ 30 dBm\n{T}{T}Channels [149 - 165] @ 30 dBm\n"
+        f"{T}{T}Channels [100 - 144] @ 24 dBm\n"
+    )
+    assert sc._summarise_country(text5, "5 GHz")[2] == "ch 36–64: 30 dBm; ch 149–165: 30 dBm; ch 100–144: 24 dBm"
+    text24 = f" DE{T}Environment: Indoor/Outdoor\n{T}{T}Channels [1 - 11] @ 20 dBm\n{T}{T}Channels [12 - 13] @ 20 dBm\n"
+    assert sc._summarise_country(text24, "2.4 GHz")[2] == "ch 1–13: 20 dBm"
+
+
+def test_group_mgmt_cipher_and_tpc_sign():
+    blk = (
+        f"BSS 00:11:22:33:44:55(on wlan0)\n{T}freq: 5180.0\n{T}TPC report: TX power: 250 dBm\n"
+        f"{T}RSN:{T} * Version: 1\n{T}{T} * Group cipher: GCMP-256\n{T}{T} * Pairwise ciphers: GCMP-256\n"
+        f"{T}{T} * Authentication suites: IEEE 802.1X/SUITE-B-192\n"
+        f"{T}{T} * Capabilities: 1-PTKSA-RC 1-GTKSA-RC MFP-required MFP-capable (0x00c0)\n"
+        f"{T}{T} * Group mgmt cipher suite: BIP-GMAC-256\n"
+    )
+    d = parse_iw_scan(blk)["00:11:22:33:44:55"]
+    assert d["group_mgmt_cipher"] == "BIP-GMAC-256"
+    assert d["tpc_tx_power_dbm"] == -6  # 250 as a signed octet
+    blk_junk = f"BSS 00:11:22:33:44:66(on wlan0)\n{T}freq: 5180.0\n{T}TPC report: TX power: 63 dBm\n"
+    assert "tpc_tx_power_dbm" not in parse_iw_scan(blk_junk)["00:11:22:33:44:66"]
+
+
+def test_suite_b_128_is_not_192bit():
+    assert _ap(akm_suites=("802.1X/SUITE-B",), has_rsn_ie=True, pmf="Required").security_short == "WPA2 (802.1X)"
+    assert _ap(akm_suites=("802.1X/SUITE-B-192",), has_rsn_ie=True, pmf="Required").security_short == "WPA3 (802.1X-192)"
+    assert sc._akm_label(("802.1X/SUITE-B",)) == "Enterprise (802.1X)"
+
+
+def test_nmcli_fallback_owe_transition_open_side():
+    # nmcli: RSN-FLAGS "owe" is emitted for both OWE and OWE-TM; SECURITY differs
+    assert _ap(security="OWE-TM", rsn_flags="pair_ccmp group_ccmp owe").security_short == "Open (OWE transition)"
+    assert _ap(security="OWE", rsn_flags="pair_ccmp group_ccmp owe").security_short == "OWE"

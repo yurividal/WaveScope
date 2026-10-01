@@ -93,7 +93,11 @@ def _parse_cisco_tx_power(text: str, d: dict) -> None:
         return
     try:
         if len(raw) >= 6 and raw[:4] == bytes([0x00, 0x40, 0x96, 0x00]):
-            d["cisco_tx_power_dbm"] = int(raw[4])
+            # Signed octet (Wireshark dissect_vendor_ie_aironet reads DTPC
+            # power with proto_tree_add_item_ret_int); keep plausible values.
+            power = raw[4] - 256 if raw[4] > 127 else raw[4]
+            if -20 <= power <= 40:
+                d["cisco_tx_power_dbm"] = int(power)
     except Exception:
         pass
 
