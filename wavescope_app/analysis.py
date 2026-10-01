@@ -96,27 +96,44 @@ def ap_congestion(ap: AccessPoint, stats: Dict[Tuple[str, int], ChannelStats]) -
     return worst
 
 
+def same_radio(a: AccessPoint, b: AccessPoint) -> bool:
+    """True when two BSSs are virtual APs of one physical radio.
+
+    Requires the identical operating channel (band, primary channel, width)
+    plus BSSID-level evidence (same AP group / MLD, or the strict
+    locally-administered derivation — see bssids_related).
+    """
+    return (
+        a.band == b.band
+        and a.channel == b.channel
+        and a.bandwidth_mhz == b.bandwidth_mhz
+        and bssids_related(a, b)
+    )
+
+
 def find_bss_color_collisions(aps: List[AccessPoint]) -> Dict[str, List[AccessPoint]]:
     """Map bssid → other APs using the same HE BSS color on overlapping spectrum.
 
     BSS coloring (802.11ax 26.17) lets a STA ignore inter-BSS frames by
     color; two *different* APs on overlapping channels with the same color
-    defeat that and should be re-colored.  BSSs of the same physical AP
-    (same AP group / MLD) intentionally share a color and are skipped, as
-    are BSSs with coloring disabled.
+    defeat that and should be re-colored.  BSSs of the same radio (see
+    same_radio) intentionally share a color and are skipped, as are BSSs
+    with coloring disabled.
     """
     colored = [
-        (a, ap_block(a), ap_group_key_for(a))
+        (a, ap_block(a))
         for a in aps
         if a.bss_color is not None and not a.bss_color_disabled and not a.is_lingering
     ]
     out: Dict[str, List[AccessPoint]] = {}
-    for i, (a, blk_a, grp_a) in enumerate(colored):
-        for b, blk_b, grp_b in colored[i + 1:]:
-            if a.bss_color != b.bss_color or a.band != b.band or grp_a == grp_b:
+    for i, (a, blk_a) in enumerate(colored):
+        for b, blk_b in colored[i + 1:]:
+            if a.bss_color != b.bss_color or a.band != b.band:
                 continue
             if not _overlaps(blk_a, blk_b):
                 continue
+            if same_radio(a, b):
+                continue  # virtual BSSs of one radio share a color by design
             out.setdefault(a.bssid.lower(), []).append(b)
             out.setdefault(b.bssid.lower(), []).append(a)
     return out
