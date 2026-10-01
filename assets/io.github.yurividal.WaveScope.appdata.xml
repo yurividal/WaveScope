@@ -64,6 +64,12 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="2.1.0" date="2026-10-01">
+      <description>
+        <p>Kernel scan cache via iw as the single data source (verified against Wireshark), an Issues tab with configuration checks, side-by-side Compare, BSSID labels, column profiles with pinned columns, a Find AP beeper, saved sessions and CSV export, and a Settings dialog.</p>
+      </description>
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v2.1.0</url>
+    </release>
     <release version="2.0.3" date="2026-10-01">
       <description>
         <p>Fixes false BSS color collision warnings between SSIDs of the same radio.</p>

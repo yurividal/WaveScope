@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (2.1)
+## v2.1.0 — 2026-10-01
 
 ### New data source: the kernel scan cache via iw (single source of truth)
 - **All BSS data now comes from one place** — the kernel's cfg80211 scan results as decoded by `iw` — instead of merging NetworkManager's list (wpa_supplicant's copy, re-interpreted by NM) with iw's. This removes the BSSID matching, the percent-vs-dBm and "0 MHz" reconciliation and the 30 s / 180 s cache-lifetime mismatch behind several earlier bugs.
