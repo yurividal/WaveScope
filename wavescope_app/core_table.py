@@ -244,7 +244,7 @@ class APTableModel(QAbstractTableModel):
             return ap.phy_mode
         if col == COL_GEN:
             if ap.wifi_gen:
-                return ap.wifi_gen
+                return f"≥{ap.wifi_gen}" if ap.gen_inferred else ap.wifi_gen
             # "Legacy" only when iw decoded the BSS and found no HT+ IEs.
             return "Legacy" if ap.iw_seen and ap.phy_mode in ("A", "B/G") else ""
         if col == COL_UTIL:

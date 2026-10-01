@@ -75,6 +75,9 @@ class AccessPoint:
     basic_rates: str = ""  # basic (mandatory) legacy rates in Mbps
     has_11b_rates: Optional[bool] = None  # 802.11b DSSS/CCK rates enabled
     last_seen_ms: Optional[int] = None  # iw "last seen … ms ago"
+    radio_params_from: str = ""  # sibling BSSID whose radio-level iw data was inherited
+    gen_inferred: bool = False  # wifi_gen guessed from the band (no beacon data)
+    iw_restored: bool = False  # iw fields restored from the GUI's miss-cache this cycle
     # ── Connected-session telemetry (iw link / iw station dump) ────────────
     conn_iface: str = ""
     conn_link_ssid: str = ""

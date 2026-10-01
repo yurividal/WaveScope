@@ -234,7 +234,7 @@ from .theme import (
 # Constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-VERSION = "2.0.1"
+VERSION = "2.0.2"
 APP_NAME = "WaveScope"
 
 
@@ -698,6 +698,66 @@ def ap_group_key(bssid: str) -> str:
         return ":".join(parts)
     except ValueError:
         return bssid.upper()
+
+
+def _mac_octets(mac: str) -> Optional[List[int]]:
+    parts = re.split(r"[:\-]", (mac or "").strip())
+    if len(parts) != 6:
+        return None
+    try:
+        return [int(x, 16) for x in parts]
+    except ValueError:
+        return None
+
+
+def laa_derived_pair(a: str, b: str) -> bool:
+    """True when one BSSID looks derived from the other by the common
+    "locally-administered first octet" scheme.
+
+    Several vendors create extra per-SSID/per-radio BSSIDs by rewriting the
+    first octet of the base MAC and setting its locally-administered (U/L)
+    bit, sometimes also using the low nibble of the last octet as an index:
+        84:78:48:EA:44:D7  →  8A:78:48:EA:44:D7
+        54:B7:BD:F9:AB:9D  →  6A:B7:BD:F9:AB:99
+    Rule: at least one address is locally administered, octets 2-5 are
+    identical and the high nibble of octet 6 is identical — i.e. 36
+    device-specific bits match exactly.  Two *different* APs of one vendor
+    have unique MACs, so they never satisfy this; two universally-
+    administered BSSIDs (e.g. neighbouring Cisco APs …:22:40 / …:22:50) are
+    never matched by it at all.
+    """
+    oa, ob = _mac_octets(a), _mac_octets(b)
+    if oa is None or ob is None or oa == ob:
+        return False
+    if not ((oa[0] | ob[0]) & 0x02):
+        return False
+    return oa[1:5] == ob[1:5] and (oa[5] & 0xF0) == (ob[5] & 0xF0)
+
+
+def similar_signal(a: "AccessPoint", b: "AccessPoint", max_db: float = 3.0) -> bool:
+    """True when two BSSs are received at about the same level.
+
+    Never mixes sources: an exact iw dBm and a dBm estimated from nmcli's
+    percentage can disagree by several dB.  When either BSS lacks an exact
+    value both are compared on nmcli's SIGNAL scale, where NetworkManager
+    maps 60 dB onto 100 %, so max_db dB ≈ max_db × 100/60 percentage points.
+    """
+    if a.dbm_exact is not None and b.dbm_exact is not None:
+        return abs(a.dbm_exact - b.dbm_exact) <= max_db
+    return abs(a.signal - b.signal) <= max_db * 100.0 / 60.0
+
+
+def bssids_related(a: "AccessPoint", b: "AccessPoint") -> bool:
+    """BSSID-level evidence that two BSSs belong to the same physical AP.
+
+    Used only together with RF evidence (same channel, width, block center
+    and similar RSSI) by the channel graph and radio-parameter inheritance.
+    """
+    if a.mld_mac and a.mld_mac == b.mld_mac:
+        return True
+    if ap_group_key_for(a) == ap_group_key_for(b):
+        return True
+    return laa_derived_pair(a.bssid, b.bssid)
 
 
 def ap_group_key_for(ap: "AccessPoint") -> str:

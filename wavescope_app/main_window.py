@@ -16,9 +16,10 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self.resize(1400, 850)
 
         self._aps: List[AccessPoint] = []
-        # Cache for iw-enriched fields — persisted across up to 5 missed cycles
+        # Cache for iw-enriched fields, kept while NetworkManager still lists
+        # the BSS (up to IW_CACHE_MAX_AGE_S) — see _on_data.
         self._iw_cache: Dict[str, dict] = {}  # bssid.lower() → field snapshot
-        self._iw_miss: Dict[str, int] = {}  # bssid.lower() → consecutive-miss count
+        self._iw_seen_at: Dict[str, float] = {}  # bssid.lower() → monotonic time iw last decoded it
         # Cache for fields that must never regress to 0 / "" / None once known
         self._sticky_cache: Dict[str, dict] = {}  # bssid.lower() → {field: last_good}
         self._conn_counter_prev: Dict[str, Dict[str, int]] = {}

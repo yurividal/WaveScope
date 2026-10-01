@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.2 — 2026-10-01
+
+### Fixes
+- **Most BSSs lost their decoded beacon data** — iw prints the "Information elements from … frame" header only when probe-response data exists or differs from the beacon; for BSSs heard only via beacons (24 of 34 in a real scan) the parser treated every IE as metadata, so generation, width, security details, BSS Load, etc. were missing. IEs are now recognised by name, independent of that header.
+- **Second SSID of a radio showed as Wi-Fi 6E / 20 MHz** — the kernel drops a BSS from `iw scan dump` 30 s after it was last heard (except the connected one), while wpa_supplicant — and so nmcli — keeps it until it is 180 s old and missed by 2 scans. Decoded iw data is now kept for as long as nmcli still lists the BSS (up to 180 s) instead of 5 cycles.
+- **SSIDs of one radio not grouped on 6 GHz (and some 2.4 GHz APs)** — vendors that derive per-SSID BSSIDs by rewriting the first octet with the locally-administered bit set (e.g. `84:78:48:EA:44:D7` → `8A:78:48:EA:44:D7`) are now recognised. The rule requires 36 device-specific bits to match exactly, so neighbouring APs of the same vendor (e.g. Cisco `…:22:40` / `…:22:50`) are never merged.
+- **BSSIDs iw never decoded** borrow radio-level data (width, center, puncturing, generation, BSS color, power, country) from a same-radio sibling on the same frequency and signal; Details shows the source. A band-based generation guess is shown as "≥ WiFi 6E" and always yields to decoded data.
+- **Signal comparisons never mix sources** — exact iw dBm is compared with exact dBm, otherwise nmcli percentages are compared.
+
 ## v2.0.1 — 2026-10-01
 
 ### Fixes

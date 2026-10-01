@@ -432,26 +432,32 @@ def _hex_bytes(text: str) -> bytes:
         return b""
 
 
+# BSS-level lines iw prints before the IEs (iw scan.c print_bss_handler);
+# every other single-tab "<Name>:" line is an information element.
+_IW_BSS_META = frozenset({"TSF", "freq", "beacon interval", "capability", "signal", "last seen"})
+
+
 def _iw_block_sections(lines: List[str]) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     """Split one `iw scan dump` BSS block into top-level sections.
 
     iw prints every IE as a single-tab line "<Name>: <inline text>" followed
-    by deeper-indented detail lines.  Returns (meta, ies) where *meta* holds
-    the BSS-level lines (freq, signal, last seen, …) and *ies* the IE
-    sections.  Values are lists because names repeat ("Vendor specific",
-    "Unknown IE (221)") and because iw prints the Probe Response and Beacon
-    IE sets separately when both exist — the probe-response set comes first
-    and the beacon set's entries are appended after it.
+    by deeper-indented detail lines.  Returns (meta, ies): *meta* holds the
+    BSS-level lines (_IW_BSS_META), *ies* the IE sections.
+
+    The "Information elements from … frame:" header is NOT a reliable
+    separator: iw prints it only when probe-response data exists or the
+    beacon IEs differ from it, so a BSS heard only via beacons has no header
+    at all.  Values are lists because names repeat ("Vendor specific",
+    "Unknown IE (221)") and because iw may print a Probe Response set and a
+    Beacon set; the probe-response set comes first.
     """
     meta: Dict[str, List[str]] = {}
     ies: Dict[str, List[str]] = {}
-    target = meta
     cur_list: Optional[List[str]] = None
     for line in lines[1:]:
         if line.startswith("\t") and not line.startswith("\t\t"):
             body = line[1:]
             if body.startswith("Information elements from"):
-                target = ies
                 cur_list = None
                 continue
             name, sep, rest = body.partition(":")
@@ -459,6 +465,7 @@ def _iw_block_sections(lines: List[str]) -> Tuple[Dict[str, List[str]], Dict[str
                 cur_list = None
                 continue
             name = name.strip()
+            target = meta if name in _IW_BSS_META else ies
             bucket = target.setdefault(name, [])
             bucket.append(rest)
             cur_list = bucket
@@ -1380,12 +1387,15 @@ def enrich_with_iw(
             if ap.dbm_exact is None and conn.get("conn_link_signal_dbm") is not None:
                 ap.dbm_exact = float(conn["conn_link_signal_dbm"])
 
+    _inherit_radio_params(aps)
+
     # ── Frequency-based wifi_gen fallback ─────────────────────────────────
     # If iw missed the AP (no scan cache for the 6 GHz radio), infer the
     # generation from frequency — 6 GHz operation requires 802.11ax or newer.
     for ap in aps:
         if not ap.wifi_gen and ap.freq_mhz >= 5925:
             ap.wifi_gen = "WiFi 6E"
+            ap.gen_inferred = True  # a minimum, not a fact: could be Wi-Fi 7
 
     # ── OWE transition pairing ────────────────────────────────────────────
     # The open BSS names its hidden OWE twin; mirror the link on the twin.
@@ -1420,6 +1430,77 @@ def enrich_with_iw(
                     ap.manufacturer_source = "LAA sibling OUI"
         except ValueError:
             pass
+
+
+# Radio-level fields: identical for every virtual BSS of one radio, so a BSS
+# iw did not decode may borrow them from a decoded sibling.  Per-BSS fields
+# (security, SSID, station count, RSSI) are deliberately not shared.
+_RADIO_LEVEL_FIELDS = (
+    "wifi_gen",
+    "iw_center_freq",
+    "iw_80p80",
+    "punct_bitmap",
+    "phy_cap_summary",
+    "he_eht_features",
+    "bss_color",
+    "bss_color_disabled",
+    "he_6ghz_ap_type",
+    "country",
+    "country_env",
+    "country_power",
+    "tpe_summary",
+    "power_constraint_db",
+    "tpc_tx_power_dbm",
+    "chan_util",
+    "ap_name",
+)
+
+
+def _inherit_radio_params(aps: List[AccessPoint]) -> None:
+    """Fill radio-level data for BSSs iw missed from a same-radio sibling.
+
+    Some APs expose extra SSIDs that only NetworkManager lists (e.g. a 6 GHz
+    radio whose second BSSID never appears in `iw scan dump`); nmcli then
+    reports 0 MHz width and the BSS is drawn as a 20 MHz sliver.  A sibling is
+    a decoded BSS on the same frequency, within 3 dB, with a related BSSID
+    (see bssids_related).
+    """
+    # "Own" radio data: decoded by iw this cycle, or restored from the GUI's
+    # short-lived iw cache — never data that was itself inherited or guessed.
+    def _own(a: AccessPoint) -> bool:
+        return (a.iw_seen or a.iw_restored) and not a.radio_params_from
+
+    decoded = [a for a in aps if _own(a)]
+    for ap in aps:
+        if _own(ap) or not ap.freq_mhz:
+            continue
+        sib = next(
+            (
+                d
+                for d in decoded
+                if d.freq_mhz == ap.freq_mhz
+                and similar_signal(ap, d)
+                and bssids_related(ap, d)
+            ),
+            None,
+        )
+        if sib is None:
+            continue
+        for f in _RADIO_LEVEL_FIELDS:
+            val = getattr(sib, f)
+            if val in (None, "", 0, False):
+                continue
+            # A band-based generation guess always yields to the sibling's
+            # decoded value; other fields only fill gaps.
+            if getattr(ap, f) in (None, "", 0, False) or (f == "wifi_gen" and ap.gen_inferred):
+                setattr(ap, f, val)
+        if sib.wifi_gen and not sib.gen_inferred:
+            ap.gen_inferred = False
+        if sib.bandwidth_mhz and (ap.bandwidth_mhz == 0 or ap.bandwidth_mhz < sib.bandwidth_mhz):
+            ap.bandwidth_mhz = sib.bandwidth_mhz
+        if ap.rate_mbps == 0 and sib.rate_mbps:
+            ap.rate_mbps = sib.rate_mbps
+        ap.radio_params_from = sib.bssid
 
 
 # ─────────────────────────────────────────────────────────────────────────────

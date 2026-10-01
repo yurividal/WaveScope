@@ -670,11 +670,16 @@ class ChannelGraphWidget(QWidget):
     _GROUP_MAX_LINES = 3
 
     def _build_shapes(self, visible: List[AccessPoint]) -> List[Tuple[str, List[AccessPoint]]]:
-        """[(shape_key, members)] — members[0] is the strongest (drawn) BSS."""
+        """[(shape_key, members)] — members[0] is the strongest (drawn) BSS.
+
+        BSSs share a shape when they occupy the identical block (band,
+        primary channel, width, center), are within _GROUP_DB_TOLERANCE of
+        the strongest member, and have related BSSIDs (same AP group / MLD,
+        or a locally-administered derivation — see bssids_related).
+        """
         buckets: Dict[tuple, List[AccessPoint]] = {}
         for ap in visible:
             key = (
-                ap_group_key_for(ap),
                 ap.band,
                 ap.channel,
                 ap.bandwidth_mhz,
@@ -688,13 +693,17 @@ class ChannelGraphWidget(QWidget):
             clusters: List[List[AccessPoint]] = []
             for ap in aps:
                 for cl in clusters:
-                    if cl[0].dbm - ap.dbm <= self._GROUP_DB_TOLERANCE:
+                    if similar_signal(cl[0], ap, self._GROUP_DB_TOLERANCE) and any(
+                        bssids_related(ap, m) for m in cl
+                    ):
                         cl.append(ap)
                         break
                 else:
                     clusters.append([ap])
-            for idx, cl in enumerate(clusters):
-                shape_key = cl[0].bssid if len(cl) == 1 else "grp|" + "|".join(map(str, key)) + f"|{idx}"
+            for cl in clusters:
+                # Key on the sorted member set so a shape survives scans even
+                # when the strongest member changes.
+                shape_key = cl[0].bssid if len(cl) == 1 else "grp|" + "|".join(sorted(a.bssid for a in cl))
                 shapes.append((shape_key, cl))
         return shapes
 

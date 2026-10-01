@@ -6,7 +6,7 @@ and detail/connection rendering methods for the main window.
 
 from .core import *
 from .core_vendor import _resolve_vendor_icon_path
-from .core_scanner import _IW_COPY_FIELDS, _CONN_COPY_FIELDS
+from .core_scanner import _IW_COPY_FIELDS, _CONN_COPY_FIELDS, _inherit_radio_params
 from .graphs import ChannelAllocationsDialog
 from .capture import CaptureTypeDialog, ManagedCaptureWindow, MonitorModeWindow
 from .known_ssids import KnownSSIDStore, KnownSSIDDialog
@@ -76,8 +76,11 @@ class MainWindowLogicMixin:
         if sm is not None and sm.selectedRows():
             self._on_selection_change(None, None)
 
-    # Fields populated exclusively by enrich_with_iw — persist across up to
-    # 5 cycles in which iw misses the BSS.  The live RSSI (dbm_exact) and the
+    # Matches wpa_supplicant's DEFAULT_BSS_EXPIRATION_AGE (wpa_supplicant/config.h).
+    IW_CACHE_MAX_AGE_S = 180.0
+
+    # Fields populated exclusively by enrich_with_iw — restored while iw has
+    # dropped the BSS but nmcli still lists it (see IW_CACHE_MAX_AGE_S).  The live RSSI (dbm_exact) and the
     # iw "last seen" age are deliberately excluded: restoring them would freeze
     # the dBm column while nmcli's signal keeps moving.
     _IW_PERSIST_FIELDS = tuple(
@@ -177,6 +180,32 @@ class MainWindowLogicMixin:
         finally:
             self._suspend_col_resize_tracking = False
 
+    def _restore_iw_fields(self, aps: List[AccessPoint], now: float) -> None:
+        """Keep each BSS's last decoded iw data while nmcli still lists it.
+
+        The kernel (cfg80211) drops a BSS from `iw scan dump` 30 s after it
+        was last heard, while wpa_supplicant — and so nmcli — keeps it until
+        it is 180 s old and missed by 2 scans.  While nmcli still lists a
+        BSS its last decoded beacon data stays valid, so it is restored for
+        that same window (IW_CACHE_MAX_AGE_S) instead of a fixed number of
+        cycles.  Afterwards, BSSs iw never decoded borrow radio-level data
+        from a same-radio sibling (_inherit_radio_params).
+        """
+        for ap in aps:
+            key = ap.bssid.lower()
+            if ap.iw_seen:
+                self._iw_cache[key] = {f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS}
+                self._iw_seen_at[key] = now
+            elif key in self._iw_cache and now - self._iw_seen_at.get(key, 0.0) <= self.IW_CACHE_MAX_AGE_S:
+                for f, v in self._iw_cache[key].items():
+                    setattr(ap, f, v)
+                ap.iw_restored = True
+                ap.gen_inferred = False
+                ap.radio_params_from = ""  # own data again, not a sibling's
+        # The scanner ran inheritance before these restores; run it again so
+        # restored BSSs can act as siblings.
+        _inherit_radio_params(aps)
+
     def _on_data(self, aps: List[AccessPoint]):
         if self.sender() is not None and self.sender() is not self._scanner:
             return  # late emission from a scanner that is shutting down
@@ -195,18 +224,7 @@ class MainWindowLogicMixin:
                 elif field in cache:  # zero/empty but we have a good value
                     setattr(ap, field, cache[field])
 
-        # ── iw-field persistence ─────────────────────────────────────────────
-        # iw_seen marks BSSs decoded from iw's scan cache on this cycle.
-        for ap in aps:
-            key = ap.bssid.lower()
-            if ap.iw_seen:
-                self._iw_cache[key] = {f: getattr(ap, f) for f in self._IW_PERSIST_FIELDS}
-                self._iw_miss[key] = 0
-            elif key in self._iw_cache and self._iw_miss.get(key, 0) < 5:
-                # iw missed this AP but we have recent data — restore it
-                for f, v in self._iw_cache[key].items():
-                    setattr(ap, f, v)
-                self._iw_miss[key] = self._iw_miss.get(key, 0) + 1
+        self._restore_iw_fields(aps, time.monotonic())
 
         # ── connected counter deltas (retry/fail rates) ───────────────────
         for ap in aps:
@@ -242,7 +260,7 @@ class MainWindowLogicMixin:
         # `aps` already includes lingering BSSs, so this only drops entries
         # past the linger window — the caches stay bounded on long surveys.
         live = {ap.bssid.lower() for ap in aps}
-        for cache in (self._sticky_cache, self._iw_cache, self._iw_miss, self._conn_counter_prev):
+        for cache in (self._sticky_cache, self._iw_cache, self._iw_seen_at, self._conn_counter_prev):
             for key in [k for k in cache if k not in live]:
                 del cache[key]
         # ────────────────────────────────────────────────────────────────────
@@ -838,8 +856,14 @@ class MainWindowLogicMixin:
 
         # ── WiFi generation ───────────────────────────────────────────────
         gen_color = IW_GEN_COLORS.get(ap.wifi_gen, SEC_OTHER)
-        if ap.wifi_gen:
+        if ap.wifi_gen and ap.gen_inferred:
+            gen_html = badge(f"≥ {ap.wifi_gen}", gen_color) + "<br>" + dim(
+                "Inferred from the 6 GHz band — iw has no beacon data for this BSSID"
+            )
+        elif ap.wifi_gen:
             gen_html = badge(f"{ap.wifi_gen}  ·  {ap.protocol}", gen_color)
+            if ap.radio_params_from:
+                gen_html += "<br>" + dim(f"From sibling BSSID {ap.radio_params_from}")
         else:
             gen_html = ap.protocol or dim("Unknown")
 
@@ -1072,9 +1096,12 @@ class MainWindowLogicMixin:
         if ap.bandwidth_mhz > 20 and int(center) != ap.freq_mhz:
             freq_text += f"  ·  {int(center)} MHz block center"
         v["frequency"].setText(freq_text)
-        v["chan_width"].setText(
-            f"{ap.bandwidth_mhz} MHz" + (" (80+80, non-contiguous)" if ap.iw_80p80 else "")
-        )
+        width_txt = f"{ap.bandwidth_mhz} MHz" + (" (80+80, non-contiguous)" if ap.iw_80p80 else "")
+        if ap.radio_params_from:
+            width_txt += "<br>" + dim(
+                f"Radio parameters from sibling BSSID {ap.radio_params_from} (iw has no data for this BSSID)"
+            )
+        v["chan_width"].setText(width_txt)
         v["country"].setText(ap.country or dim("Unknown"))
         v["beacon_interval"].setText(
             f"{ap.beacon_interval_tu} TU"
