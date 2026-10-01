@@ -149,6 +149,7 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
     """X-axis for the 5 GHz panel — tick labels colour-coded by U-NII sub-band."""
 
     _CHAN_COLORS = _UNII_CHAN_COLORS
+    _BOLD_CHANNELS: frozenset = frozenset()  # channels whose label is drawn bold
     _DRAW_DFS_SEGMENT = True
     _DFS_FREQ_RANGE = (5260.0, 5720.0)  # ch52 .. ch144 centers
 
@@ -180,16 +181,21 @@ class FiveGhzBottomAxisItem(pg.AxisItem):
         for pen, p1, p2 in tickSpecs:
             p.setPen(pen)
             p.drawLine(p1, p2)
-        if self.style.get("tickFont") is not None:
-            p.setFont(self.style["tickFont"])
+        base_font = self.style.get("tickFont") or p.font()
+        bold_font = QFont(base_font)
+        bold_font.setBold(True)
         default_pen = self.style.get("pen") or pg.mkPen(GRAPH_AXIS_DARK)
         for rect, flags, text in textSpecs:
             clean_text = text.strip()
+            ch: Optional[int]
             try:
                 ch = int(clean_text)
                 hex_c = self._CHAN_COLORS.get(ch)
             except ValueError:
+                ch = None
                 hex_c = _UNII_NAME_COLORS.get(clean_text)
+            # Bold keeps the U-NII colour coding intact (e.g. 6 GHz PSCs).
+            p.setFont(bold_font if ch in self._BOLD_CHANNELS else base_font)
             p.setPen(pg.mkPen(hex_c) if hex_c else default_pen)
             p.drawText(rect, int(flags), text)
         p.restore()
@@ -199,6 +205,8 @@ class SixGhzBottomAxisItem(FiveGhzBottomAxisItem):
     """X-axis for the 6 GHz panel — tick labels colour-coded by U-NII sub-band."""
 
     _CHAN_COLORS = _UNII6_CHAN_COLORS
+    # Preferred Scanning Channels are drawn bold; hovering one says "PSC".
+    _BOLD_CHANNELS = PSC_6GHZ_CHANNELS
     _DRAW_DFS_SEGMENT = False
 
 
@@ -319,7 +327,7 @@ class ChannelGraphWidget(QWidget):
         # bssid → {band, color, zero, fill, curve, label}; items persist across
         # scans and are updated in place with setData (no scene churn).
         self._items: Dict[str, dict] = {}
-        # band → static decoration items (DFS strip, band label, PSC markers)
+        # band → static decoration items (DFS strip, band label)
         self._static_items: Dict[str, List[object]] = {}
         self._aps: List[AccessPoint] = []
         self._ssid_colors: Dict[str, QColor] = {}
@@ -494,7 +502,7 @@ class ChannelGraphWidget(QWidget):
 
         self._active_bands = list(bands)
 
-    # ── Static overlays (DFS strip, PSC markers, band label) ─────────────────
+    # ── Static overlays (DFS strip, band label) ───────────────────────────────
 
     def _draw_static(self, band: str, pw: "PlotWidget") -> None:
         for item in self._static_items.pop(band, []):
@@ -526,28 +534,6 @@ class ChannelGraphWidget(QWidget):
                 dfs_lbl.setPos((dfs_lo + dfs_hi) / 2.0, floor + 0.1)
                 dfs_lbl.setZValue(21)
                 items.append(dfs_lbl)
-
-        # 6 GHz Preferred Scanning Channels: small markers on the floor.
-        if band == "6 GHz":
-            psc_c = QColor(self._theme_fg)
-            psc_c.setAlpha(170)
-            xs = [CH6[c] for c in sorted(PSC_6GHZ_CHANNELS) if c in CH6]
-            psc = pg.ScatterPlotItem(
-                x=xs,
-                y=[floor + 1.2] * len(xs),
-                symbol="t1",
-                size=7,
-                pen=pg.mkPen(None),
-                brush=pg.mkBrush(psc_c),
-            )
-            psc.setZValue(20)
-            items.append(psc)
-            psc_lbl = pg.TextItem(text="▲ PSC", anchor=(0.0, 1.0), color=psc_c)
-            pf = QFont()
-            pf.setPointSize(7)
-            psc_lbl.setFont(pf)
-            psc_lbl.setPos(xmin + 4, floor + 0.1)
-            items.append(psc_lbl)
 
         # -- band name label, just inside top-right corner --
         band_color = QColor(self._theme_fg)
