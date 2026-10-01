@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.1.3 — 2026-10-01
 
 ### AppImage: self-contained scanning
 - **iw is bundled** (built from the iw 6.17 release, the version the parser follows; Ubuntu 22.04's packaged 5.16 predates Wi-Fi 7 decoding) together with libnl. The AppImage scans on hosts without iw; packet capture still uses the host's iw, tcpdump and pkexec, since root cannot read the user's AppImage mount.

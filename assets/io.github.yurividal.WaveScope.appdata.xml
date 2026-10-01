@@ -64,6 +64,12 @@
   <content_rating type="oars-1.1" />
 
   <releases>
+    <release version="2.1.3" date="2026-10-01">
+      <description>
+        <p>The AppImage now bundles iw 6.17 and scans without any host tools; optional tools (NetworkManager, tcpdump, pkexec) and the first-run vendor-database offer are shown as in-window notices instead of dialogs.</p>
+      </description>
+      <url type="details">https://github.com/yurividal/WaveScope/releases/tag/v2.1.3</url>
+    </release>
     <release version="2.1.2" date="2026-10-01">
       <description>
         <p>Verified against IEEE Std 802.11-2024: 6 GHz AP power type decoded per Table E-13, operating-class-aware Country element channel ranges, and the Mobility Domain ID shown in both octet and numeric form.</p>
