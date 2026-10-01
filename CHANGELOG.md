@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v2.0.3 — 2026-10-01
 
 ### Fixes
 - **False BSS color collision warnings (⚠)** — SSIDs of one radio share a BSS color by design, but radios whose extra BSSIDs use the locally-administered first-octet scheme (e.g. EE, Karina-style `C2:…`/`DA:…`) were flagged as colliding with themselves. Collision detection now skips any pair on the same channel and width that the same-radio rule matches; collisions between different APs are still reported.
