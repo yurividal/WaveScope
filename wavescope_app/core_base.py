@@ -245,6 +245,23 @@ from .theme import (
 
 VERSION = "2.1.3"
 APP_NAME = "WaveScope"
+IS_MACOS = sys.platform == "darwin"
+
+
+def scan_source_options() -> Tuple[Tuple[str, str, str], ...]:
+    """Sources available on this host, in default preference order."""
+    if IS_MACOS:
+        return ((
+            "corewlan", "CoreWLAN (macOS)",
+            "Native Wi-Fi scans. Allow WaveScope in System Settings → Privacy & Security → Location Services.",
+        ),)
+    return (
+        ("iw", "Kernel scan cache via iw (recommended)",
+         "All BSS data from the kernel's scan results as decoded by iw;\n"
+         "NetworkManager is only asked to trigger scans."),
+        ("nm", "NetworkManager + iw (legacy)",
+         "BSS list from NetworkManager, enriched with iw data (pre-2.1 behaviour)."),
+    )
 
 
 def _find_binary(name: str, extra_dirs: Tuple[str, ...] = ()) -> str:
@@ -315,6 +332,15 @@ REQUIRED_TOOLS: List[Tuple[str, str, str]] = [
 
 def find_missing_tools() -> List[Tuple[str, str]]:
     """Return (name, impact) for each required tool not found on disk."""
+    if IS_MACOS:
+        from .macos_wifi import corewlan_available
+
+        if corewlan_available():
+            return []
+        return [(
+            "PyObjC CoreWLAN / CoreLocation",
+            "Install the macOS Python dependencies with ./install.sh, or use a signed WaveScope.app.",
+        )]
     missing = []
     for name, resolved, impact in REQUIRED_TOOLS:
         if not _tool_ok(resolved):
@@ -323,7 +349,11 @@ def find_missing_tools() -> List[Tuple[str, str]]:
 
 
 def can_scan_at_all() -> bool:
-    """True when at least one scan data source can work (iw or nmcli)."""
+    """Whether a platform scan backend is installed (permission checked later)."""
+    if IS_MACOS:
+        from .macos_wifi import corewlan_available
+
+        return corewlan_available()
     return _tool_ok(IW_BIN) or _tool_ok(NMCLI_BIN)
 
 
@@ -337,6 +367,12 @@ def tool_notices() -> List[str]:
     as crash messages.
     """
     notes: List[str] = []
+    if IS_MACOS:
+        notes.append(
+            "macOS scans use CoreWLAN. Allow WaveScope in System Settings → Privacy & Security → "
+            "Location Services. Packet capture is available on Linux only."
+        )
+        return notes
     if not _tool_ok(NMCLI_BIN):
         notes.append(
             "NetworkManager (nmcli) is absent: WaveScope reads the kernel's scan cache and "
@@ -362,10 +398,12 @@ def warn_missing_tools_and_confirm(missing: List[Tuple[str, str]]) -> bool:
     box.setIcon(QMessageBox.Icon.Warning)
     box.setWindowTitle(f"{APP_NAME} — Missing dependencies")
     box.setText(f"{APP_NAME} could not find: {names}")
-    box.setInformativeText(
-        f"{lines}\n\nInstall the missing package(s) with your system's "
-        "package manager, then restart WaveScope for full functionality."
+    install_hint = (
+        "Run ./install.sh in the source checkout, then restart WaveScope."
+        if IS_MACOS else
+        "Install the missing package(s) with your system's package manager, then restart WaveScope for full functionality."
     )
+    box.setInformativeText(f"{lines}\n\n{install_hint}")
     proceed_btn = box.addButton("Proceed Anyway", QMessageBox.ButtonRole.AcceptRole)
     quit_btn = box.addButton("Quit", QMessageBox.ButtonRole.RejectRole)
     box.setDefaultButton(quit_btn)

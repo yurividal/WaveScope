@@ -548,7 +548,7 @@ class MainWindowLogicMixin:
     def _on_source_change(self, source: str) -> None:
         """Switch data source: restart the scanner and drop per-BSS caches,
         so values from one source never linger into the other."""
-        if source == self._data_source:
+        if source not in self._source_actions or source == self._data_source:
             return
         self._data_source = source
         for cache in (self._sticky_cache, self._iw_cache, self._iw_seen_at, self._conn_counter_prev):
@@ -559,7 +559,9 @@ class MainWindowLogicMixin:
         self.statusBar().showMessage("Data source changed — re-scanning…")
 
     def _on_source_active(self, source: str) -> None:
-        if source == "iw":
+        if source == "corewlan":
+            txt, tip = "  Source: CoreWLAN  ", "Native macOS Wi-Fi scans"
+        elif source == "iw":
             txt, tip = "  Source: iw  ", "Kernel scan cache via iw"
         else:
             txt, tip = "  Source: NetworkManager  ", "NetworkManager + iw (legacy)"
@@ -597,6 +599,9 @@ class MainWindowLogicMixin:
             self.statusBar().showMessage("Resumed scanning…")
 
     def _on_monitor_mode(self):
+        if IS_MACOS:
+            self.statusBar().showMessage("Packet capture is currently supported on Linux only.")
+            return
         picker = CaptureTypeDialog(parent=self)
         if picker.exec() != QDialog.DialogCode.Accepted:
             return
@@ -988,7 +993,7 @@ class MainWindowLogicMixin:
         gen_color = IW_GEN_COLORS.get(ap.wifi_gen, SEC_OTHER)
         if ap.wifi_gen and ap.gen_inferred:
             gen_html = badge(f"≥ {ap.wifi_gen}", gen_color) + "<br>" + dim(
-                "Inferred from the 6 GHz band — iw has no beacon data for this BSSID"
+                "Inferred from the 6 GHz band — no decoded PHY capabilities for this BSSID"
             )
         elif ap.wifi_gen:
             gen_html = badge(f"{ap.wifi_gen}  ·  {ap.protocol}", gen_color)
@@ -1087,7 +1092,7 @@ class MainWindowLogicMixin:
                 uc = SIG_EXCELLENT
             util_html = f'<span style="color:{uc};font-size:15px;font-weight:700">{util_pct}%</span>'
         else:
-            util_html = dim("No BSS Load IE")
+            util_html = dim("BSS Load not reported")
 
         # ── Roaming ───────────────────────────────────────────────────────
         kvr_items: List[str] = []
@@ -1226,7 +1231,7 @@ class MainWindowLogicMixin:
         if ap.bandwidth_mhz > 20 and int(center) != ap.freq_mhz:
             freq_text += f"  ·  {int(center)} MHz block center"
         v["frequency"].setText(freq_text)
-        width_txt = f"{ap.bandwidth_mhz} MHz"
+        width_txt = f"{ap.bandwidth_mhz} MHz" if ap.bandwidth_mhz else dim("Not reported")
         if ap.iw_80p80:
             width_txt = "80+80 MHz (non-contiguous)"
             if ap.iw_center_freq2:
@@ -1240,19 +1245,19 @@ class MainWindowLogicMixin:
         v["beacon_interval"].setText(
             f"{ap.beacon_interval_tu} TU"
             if ap.beacon_interval_tu is not None
-            else dim("Not advertised")
+            else dim("Not reported")
         )
         v["dtim_period"].setText(
-            str(ap.dtim_period) if ap.dtim_period is not None else dim("Not advertised")
+            str(ap.dtim_period) if ap.dtim_period is not None else dim("Not reported")
         )
-        v["phy_caps"].setText(ap.phy_cap_summary or dim("Not advertised"))
-        v["he_features"].setText(ap.he_eht_features or dim("Not advertised"))
+        v["phy_caps"].setText(ap.phy_cap_summary or dim("Not reported"))
+        v["he_features"].setText(ap.he_eht_features or dim("Not reported"))
         v["signal"].setText(
             f'<span style="color:{sig_col};font-size:15px;font-weight:700">'
             f"{ap.signal}%&nbsp;</span>"
             f'<span style="color:{sig_col}">({ap.dbm} dBm)</span>'
         )
-        v["max_rate"].setText(f"{int(ap.rate_mbps)} Mbps")
+        v["max_rate"].setText(f"{int(ap.rate_mbps)} Mbps" if ap.rate_mbps else dim("Not reported"))
         sec_line_top = sec_html
         sec_secondary = sec_raw if sec_display == sec_derived else sec_derived
         if should_show_secondary_line(sec_display, sec_secondary):
@@ -1261,12 +1266,12 @@ class MainWindowLogicMixin:
         else:
             v["security"].setText(sec_line_top)
         v["security"].setToolTip("")
-        v["wpa_flags"].setText(format_ie_flags(ap.wpa_flags, "WPA IE not present"))
-        v["rsn_flags"].setText(format_ie_flags(ap.rsn_flags, "RSN IE not present"))
-        v["rsn_caps"].setText(esc(ap.rsn_capabilities) or dim("Not advertised"))
-        v["vendor_ies"].setText(esc(ap.vendor_ie_ouis) or dim("Not advertised"))
-        v["wpa_flags"].setToolTip(raw_ie_or_dim(ap.wpa_flags, "WPA IE not present"))
-        v["rsn_flags"].setToolTip(raw_ie_or_dim(ap.rsn_flags, "RSN IE not present"))
+        v["wpa_flags"].setText(format_ie_flags(ap.wpa_flags, "WPA IE not reported"))
+        v["rsn_flags"].setText(format_ie_flags(ap.rsn_flags, "RSN IE not reported"))
+        v["rsn_caps"].setText(esc(ap.rsn_capabilities) or dim("Not reported"))
+        v["vendor_ies"].setText(esc(ap.vendor_ie_ouis) or dim("Not reported"))
+        v["wpa_flags"].setToolTip(raw_ie_or_dim(ap.wpa_flags, "WPA IE not reported"))
+        v["rsn_flags"].setToolTip(raw_ie_or_dim(ap.rsn_flags, "RSN IE not reported"))
         akm_compact = (ap.akm or "").strip()
         akm_verbose = (ap.akm_raw or "").strip()
         akm_primary = choose_primary_detail(akm_compact, akm_verbose)
@@ -1279,7 +1284,7 @@ class MainWindowLogicMixin:
         else:
             v["akm_raw"].setText(dim("AKM unknown"))
         v["akm_raw"].setToolTip("")
-        v["wps_manufacturer"].setText(esc(ap.wps_manufacturer) or dim("Not advertised"))
+        v["wps_manufacturer"].setText(esc(ap.wps_manufacturer) or dim("Not reported"))
         v["pmf"].setText(pmf_html)
         v["chan_util"].setText(util_html)
         v["clients"].setText(
@@ -1287,11 +1292,11 @@ class MainWindowLogicMixin:
         )
         v["roaming"].setText(kvr_html)
         if "ap_name" in v:
-            v["ap_name"].setText(esc(ap.ap_name) or dim("Not advertised"))
+            v["ap_name"].setText(esc(ap.ap_name) or dim("Not reported"))
         if "cisco_tx_power" in v:
             pwr, src = ap.power_level
             v["cisco_tx_power"].setText(
-                f"{pwr:g} dBm  {dim('(' + src + ')')}" if pwr is not None else dim("Not advertised")
+                f"{pwr:g} dBm  {dim('(' + src + ')')}" if pwr is not None else dim("Not reported")
             )
 
         # ── RF analysis & extended IEs ────────────────────────────────────
@@ -1311,7 +1316,7 @@ class MainWindowLogicMixin:
             v["congestion"].setText(dim("—"))
 
         if ap.bss_color is None:
-            v["bss_color"].setText(dim("Not advertised (pre-802.11ax)"))
+            v["bss_color"].setText(dim("Not reported"))
         else:
             txt = f"{ap.bss_color}" + (" (coloring disabled)" if ap.bss_color_disabled else "")
             others = self._color_collisions.get(ap.bssid.lower(), [])
@@ -1329,14 +1334,14 @@ class MainWindowLogicMixin:
             if subs
             else dim("None" if ap.wifi_gen == "WiFi 7" else "N/A (pre-802.11be)")
         )
-        v["ap_power_6g"].setText(esc(ap.he_6ghz_ap_type) or dim("N/A" if ap.band != "6 GHz" else "Not advertised"))
+        v["ap_power_6g"].setText(esc(ap.he_6ghz_ap_type) or dim("N/A" if ap.band != "6 GHz" else "Not reported"))
 
         if ap.mld_mac:
             links = [a for a in self._aps if a.mld_mac == ap.mld_mac and a.bssid != ap.bssid]
             link_txt = ", ".join(f"{a.band} ch {a.channel}" for a in links)
             v["mld"].setText(ap.mld_mac + (f"<br>{dim('Other links seen: ' + link_txt)}" if link_txt else ""))
         else:
-            v["mld"].setText(dim("Not advertised"))
+            v["mld"].setText(dim("Not reported"))
 
         if ap.rnr_neighbors:
             seen = {a.bssid.lower() for a in self._aps}
@@ -1355,7 +1360,7 @@ class MainWindowLogicMixin:
                 rows.append(f"{band_lbl} ch {n.get('channel')} · {b}" + (f" {dim('(' + ', '.join(flags) + ')')}" if flags else ""))
             v["rnr"].setText("<br>".join(rows))
         else:
-            v["rnr"].setText(dim("No Reduced Neighbor Report"))
+            v["rnr"].setText(dim("Reduced Neighbor Report not reported"))
 
         limits = []
         if ap.power_constraint_db is not None:
@@ -1364,7 +1369,7 @@ class MainWindowLogicMixin:
             limits.append(f"TPE: {esc(ap.tpe_summary)}")
         if ap.country_power:
             limits.append(f"Country ({esc(ap.country)}{', ' + esc(ap.country_env) if ap.country_env else ''}): {esc(ap.country_power)}")
-        v["tx_limits"].setText("<br>".join(limits) or dim("Not advertised"))
+        v["tx_limits"].setText("<br>".join(limits) or dim("Not reported"))
 
         if ap.basic_rates or ap.has_11b_rates is not None:
             txt = (f"{ap.basic_rates} Mbps" if ap.basic_rates else dim("none marked"))
@@ -1381,8 +1386,8 @@ class MainWindowLogicMixin:
         else:
             v["last_seen"].setText(dim("Unknown"))
 
-        v["rsnx"].setText(esc(ap.rsnx_caps) or dim("Not advertised"))
-        v["group_mgmt"].setText(esc(ap.group_mgmt_cipher) or dim("Not advertised"))
+        v["rsnx"].setText(esc(ap.rsnx_caps) or dim("Not reported"))
+        v["group_mgmt"].setText(esc(ap.group_mgmt_cipher) or dim("Not reported"))
         if ap.owe_transition_bssid:
             v["owe_pair"].setText(
                 f"{ap.owe_transition_bssid}"
@@ -1407,7 +1412,7 @@ class MainWindowLogicMixin:
                 + f"  {dim(f'({n} BSSID(s) of this SSID share it)')}"
             )
         else:
-            v["mobility_domain"].setText(dim("Not advertised (no 802.11r)"))
+            v["mobility_domain"].setText(dim("Not reported"))
 
     def _show_connection(self):
         def dim(text):
@@ -1504,13 +1509,13 @@ class MainWindowLogicMixin:
         v["beacon_interval"].setText(
             f"{ap.beacon_interval_tu} TU"
             if ap.beacon_interval_tu is not None
-            else dim("Not advertised")
+            else dim("Not reported")
         )
         v["dtim_period"].setText(
-            str(ap.dtim_period) if ap.dtim_period is not None else dim("Not advertised")
+            str(ap.dtim_period) if ap.dtim_period is not None else dim("Not reported")
         )
-        v["rsn_caps"].setText(ap.rsn_capabilities or dim("Not advertised"))
-        v["vendor_ies"].setText(ap.vendor_ie_ouis or dim("Not advertised"))
+        v["rsn_caps"].setText(ap.rsn_capabilities or dim("Not reported"))
+        v["vendor_ies"].setText(ap.vendor_ie_ouis or dim("Not reported"))
         v["signal"].setText(f"{ap.dbm} dBm  ({ap.signal}%)")
         if ap.conn_snr_db is not None:
             v["snr"].setText(f"{ap.conn_snr_db:.0f} dB")
@@ -1683,6 +1688,26 @@ class MainWindowLogicMixin:
                 w.shutdown_blocking()
 
         self._save_settings()
+        if IS_MACOS:
+            # CoreWLAN offers no way to cancel an in-flight native scan.
+            # Keep the GUI event loop alive until it returns, instead of
+            # blocking the close handler or destroying a running QThread.
+            self._stop_scanner(wait_ms=0)
+            if not getattr(self, "_waiting_for_native_scan", False):
+                self._waiting_for_native_scan = True
+                timer = getattr(self, "_location_timer", None)
+                if timer is not None:
+                    timer.stop()
+                # Connect before observing isRunning(): the native scan can
+                # finish at any moment, including during that observation.
+                for sc in self._retired_scanners:
+                    sc.finished.connect(self.close)
+            pending = [sc for sc in self._retired_scanners if sc.isRunning()]
+            if pending:
+                event.ignore()
+                self.setEnabled(False)
+                self.statusBar().showMessage("Waiting for the current macOS Wi-Fi scan to finish before closing…")
+                return
         self._stop_scanner(wait_ms=None)
         for sc in list(self._retired_scanners):
             sc.stop(wait_ms=None)
@@ -1714,7 +1739,7 @@ class MainWindowLogicMixin:
         if 0 <= idx < self._interval_combo.count():
             self._interval_combo.setCurrentIndex(idx)
         self._linger_spin.setValue(_int("scan/linger_s", self._linger_spin.value()))
-        src = st.value("scan/source", "iw")
+        src = st.value("scan/source", self._data_source)
         if src in self._source_actions:
             self._data_source = src
             self._source_actions[src].setChecked(True)
@@ -1958,6 +1983,11 @@ class MainWindowLogicMixin:
         self.statusBar().showMessage(f"Reviewing {name}")
 
     def _end_review_banner(self) -> None:
+        if self._review_mode:
+            # A saved session can come from a different machine or backend.
+            # Its beacon/cache evidence must never overwrite fresh scans.
+            for cache in (self._sticky_cache, self._iw_cache, self._iw_seen_at, self._conn_counter_prev):
+                cache.clear()
         self._review_mode = False
         self._review_banner.hide()
 

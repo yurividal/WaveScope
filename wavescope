@@ -4,6 +4,8 @@ if [ ! -x .venv/bin/python ]; then
     echo "WaveScope: .venv not found. Run ./install.sh first." >&2
     exit 1
 fi
-export GIO_LAUNCHED_DESKTOP_FILE="$HOME/.local/share/applications/wavescope.desktop"
-export GIO_LAUNCHED_DESKTOP_FILE_PID=$$
+if [ "$(uname -s)" = "Linux" ]; then
+    export GIO_LAUNCHED_DESKTOP_FILE="$HOME/.local/share/applications/wavescope.desktop"
+    export GIO_LAUNCHED_DESKTOP_FILE_PID=$$
+fi
 exec .venv/bin/python main.py "$@"

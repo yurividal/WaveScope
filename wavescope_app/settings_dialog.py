@@ -13,7 +13,7 @@ from typing import List
 
 from .core import *  # noqa: F401,F403
 from .annotations import is_valid_pattern, normalize_pattern
-from .beeper import find_player, ToneBeeper
+from .beeper import find_player, ToneBeeper, PLAYERS
 from .column_profiles import ColumnProfile
 from .issues import CHECKS, IssueSettings
 
@@ -101,11 +101,16 @@ class SettingsDialog(QDialog):
 
         box = QGroupBox("Data source")
         bl = QVBoxLayout(box)
-        self._src_iw = QRadioButton("Kernel scan cache via iw (recommended)")
-        self._src_nm = QRadioButton("NetworkManager + iw (legacy)")
-        (self._src_iw if mw._data_source == "iw" else self._src_nm).setChecked(True)
-        bl.addWidget(self._src_iw)
-        bl.addWidget(self._src_nm)
+        self._source_buttons = {}
+        for key, text, tip in scan_source_options():
+            button = QRadioButton(text)
+            button.setToolTip(tip)
+            self._source_buttons[key] = button
+            # Preserve the existing Linux widget names for callers/tests.
+            setattr(self, f"_src_{key}", button)
+            bl.addWidget(button)
+        selected = mw._data_source if mw._data_source in self._source_buttons else next(iter(self._source_buttons))
+        self._source_buttons[selected].setChecked(True)
         lay.addWidget(box)
         lay.addStretch()
         return w
@@ -309,7 +314,8 @@ class SettingsDialog(QDialog):
         self._sound = QCheckBox("Beep by default")
         self._sound.setChecked(self._mw._find_sound_default)
         lay.addWidget(self._sound)
-        lay.addWidget(QLabel(f"Audio player: {player or 'none found (pw-play / paplay / aplay) — system beep'}"))
+        fallback = f"none found ({' / '.join(PLAYERS)}) — system beep"
+        lay.addWidget(QLabel(f"Audio player: {player or fallback}"))
         b = QPushButton("Test tone")
         b.clicked.connect(self._test_tone)
         lay.addWidget(b, 0, Qt.AlignmentFlag.AlignLeft)
@@ -341,7 +347,7 @@ class SettingsDialog(QDialog):
             theme_index=self._theme.currentIndex(),
             interval_index=self._interval.currentIndex(),
             linger_s=self._linger.value(),
-            source="iw" if self._src_iw.isChecked() else "nm",
+            source=next(key for key, button in self._source_buttons.items() if button.isChecked()),
             label_mode=self._label_mode.currentData(),
             profile=self._prof.currentText(),
             profile_override=self._edited_profile(self._prof.currentText()),

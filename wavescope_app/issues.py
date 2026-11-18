@@ -123,8 +123,8 @@ def detect_issues(aps: Sequence[AccessPoint], cfg: IssueSettings = None) -> List
                 problems.append("PSK AKM (WPA2 or WPA2/WPA3 transition)")
             if not (sae_akm or owe_akm or ent_wpa3):
                 problems.append(f"no WPA3/OWE AKM ({sec})")
-            if ap.pmf != "Required":
-                problems.append(f"PMF {ap.pmf.lower() if ap.pmf else 'unknown'} (must be required)")
+            if ap.pmf in ("No", "Optional"):
+                problems.append(f"PMF {ap.pmf.lower()} (must be required)")
             if problems:
                 add(
                     "six_ghz_security", "6 GHz security not compliant",
@@ -132,7 +132,7 @@ def detect_issues(aps: Sequence[AccessPoint], cfg: IssueSettings = None) -> List
                     "and no transition mode: " + "; ".join(problems) + ".",
                     [ap],
                 )
-        if sae_akm and not psk_akm and ap.pmf != "Required":
+        if sae_akm and not psk_akm and ap.pmf in ("No", "Optional"):
             add(
                 "sae_without_pmf", "WPA3-Personal without PMF required",
                 f"A WPA3-Personal (SAE-only) BSS must set PMF to required; this BSS has PMF {ap.pmf.lower() or 'unknown'}.",
@@ -144,7 +144,7 @@ def detect_issues(aps: Sequence[AccessPoint], cfg: IssueSettings = None) -> List
                 "WPA3 transition mode requires PMF capable (optional); PMF is disabled here.",
                 [ap],
             )
-        if owe_akm and ap.pmf != "Required":
+        if owe_akm and ap.pmf in ("No", "Optional"):
             add("sae_without_pmf", "OWE without PMF required", "Enhanced Open (OWE) requires PMF.", [ap])
         if sec.startswith("WPA2 (") and ap.pmf == "No":
             add("pmf_off", "PMF disabled", "WPA2 with PMF capable (optional) is recommended; it protects deauth/disassoc frames.", [ap])

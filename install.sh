@@ -5,7 +5,8 @@
 #   apt     Debian 12+, Ubuntu 22.04+ and derivatives
 #   dnf     Fedora 39+ (RHEL-likes with the same package names)
 #   zypper  openSUSE Tumbleweed / Leap
-# Other distros: install the equivalent packages by hand, then re-run.
+# macOS: Python + PyObjC CoreWLAN/CoreLocation; no Linux system tools.
+# Other Linux distros: install the equivalent packages by hand, then re-run.
 #
 # Creates ./.venv (PyQt6 + pyqtgraph + numpy from PyPI, pinned by
 # constraints.txt), writes the ./wavescope launcher and a user-level
@@ -14,6 +15,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$SCRIPT_DIR/.venv"
+PLATFORM="$(uname -s)"
+PYTHON_BIN="${WAVESCOPE_PYTHON:-python3}"
+
+case "$PLATFORM" in
+    Linux|Darwin) ;;
+    *) echo "WaveScope supports Linux and macOS." >&2; exit 1 ;;
+esac
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  WaveScope — Install & Setup"
@@ -23,7 +31,9 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # Python + runtime tools (nmcli, iw, tcpdump, pkexec) + the XCB libs the
 # PyQt6 pip wheels need for the Qt xcb platform plugin.
 PKG_MGR=""
-if command -v apt-get &>/dev/null && command -v dpkg &>/dev/null; then
+if [ "$PLATFORM" = "Darwin" ]; then
+    PKG_MGR="macos"
+elif command -v apt-get &>/dev/null && command -v dpkg &>/dev/null; then
     PKG_MGR="apt"
     PKGS="python3 python3-venv python3-pip network-manager iw tcpdump pkexec libxcb-cursor0 libxcb-xinerama0 libxcb-randr0"
     INSTALL_CMD="sudo apt-get install -y"
@@ -48,7 +58,11 @@ pkg_installed() {
 }
 
 echo ""
-if [ -z "$PKG_MGR" ]; then
+if [ "$PLATFORM" = "Darwin" ]; then
+    echo "▸ macOS: scanning uses the system CoreWLAN framework through PyObjC."
+    echo "  Install a current Python from https://www.python.org/downloads/macos/"
+    echo "  if needed. Linux tools and desktop entries are not required."
+elif [ -z "$PKG_MGR" ]; then
     echo "▸ No supported package manager found (apt/dnf/zypper)."
     echo "  Make sure these are installed: python3 (>= 3.10) with venv + pip,"
     echo "  NetworkManager (nmcli), iw, tcpdump, polkit (pkexec), libxcb-cursor."
@@ -76,12 +90,12 @@ else
 fi
 
 # ── 2. Python (hard requirement) ────────────────────────────────────────────
-if ! command -v python3 &>/dev/null; then
-    echo "ERROR: python3 not found. Install the packages listed above and re-run."
+if ! command -v "$PYTHON_BIN" &>/dev/null; then
+    echo "ERROR: $PYTHON_BIN not found. Install Python and re-run."
     exit 1
 fi
-if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
-    echo "ERROR: WaveScope needs Python >= 3.10 (found $(python3 -V 2>&1))."
+if ! "$PYTHON_BIN" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+    echo "ERROR: WaveScope needs Python >= 3.10 (found $("$PYTHON_BIN" -V 2>&1))."
     exit 1
 fi
 
@@ -92,16 +106,20 @@ have_tool() {
     command -v "$1" &>/dev/null || [ -x "/usr/sbin/$1" ] || [ -x "/sbin/$1" ]
 }
 echo ""
-echo "▸ Checking runtime tools…"
-TOOLS_OK=1
-have_tool nmcli   || { echo "  WARNING: nmcli not found (NetworkManager) - scanning will not work"; TOOLS_OK=0; }
-have_tool iw      || { echo "  WARNING: iw not found - WiFi gen, BSS load, k/v/r and vendor IE data unavailable"; TOOLS_OK=0; }
-have_tool tcpdump || { echo "  WARNING: tcpdump not found - packet capture unavailable"; TOOLS_OK=0; }
-have_tool pkexec  || { echo "  WARNING: pkexec not found (polkit) - packet capture cannot get root"; TOOLS_OK=0; }
-[ "$TOOLS_OK" -eq 1 ] && echo "  nmcli, iw, tcpdump, pkexec: OK"
+if [ "$PLATFORM" = "Linux" ]; then
+    echo "▸ Checking runtime tools…"
+    TOOLS_OK=1
+    have_tool nmcli   || { echo "  WARNING: nmcli not found (NetworkManager) - scanning will not work"; TOOLS_OK=0; }
+    have_tool iw      || { echo "  WARNING: iw not found - WiFi gen, BSS load, k/v/r and vendor IE data unavailable"; TOOLS_OK=0; }
+    have_tool tcpdump || { echo "  WARNING: tcpdump not found - packet capture unavailable"; TOOLS_OK=0; }
+    have_tool pkexec  || { echo "  WARNING: pkexec not found (polkit) - packet capture cannot get root"; TOOLS_OK=0; }
+    if [ "$TOOLS_OK" -eq 1 ]; then
+        echo "  nmcli, iw, tcpdump, pkexec: OK"
+    fi
+fi
 
 # ── 4. Python venv ──────────────────────────────────────────────────────────
-[ ! -d "$VENV" ] && { echo ""; echo "▸ Creating Python venv…"; python3 -m venv "$VENV"; }
+[ ! -d "$VENV" ] && { echo ""; echo "▸ Creating Python venv…"; "$PYTHON_BIN" -m venv "$VENV"; }
 
 echo ""
 echo "▸ Installing Python packages…"
@@ -116,8 +134,10 @@ if [ ! -x .venv/bin/python ]; then
     echo "WaveScope: .venv not found. Run ./install.sh first." >&2
     exit 1
 fi
-export GIO_LAUNCHED_DESKTOP_FILE="$HOME/.local/share/applications/wavescope.desktop"
-export GIO_LAUNCHED_DESKTOP_FILE_PID=$$
+if [ "$(uname -s)" = "Linux" ]; then
+    export GIO_LAUNCHED_DESKTOP_FILE="$HOME/.local/share/applications/wavescope.desktop"
+    export GIO_LAUNCHED_DESKTOP_FILE_PID=$$
+fi
 exec .venv/bin/python main.py "$@"
 LAUNCHEOF
 chmod +x "$SCRIPT_DIR/wavescope"
@@ -129,7 +149,7 @@ ICON_DIR="$HOME/.local/share/icons/hicolor/scalable/apps"
 # (which puts the authoritative entry in /usr/share/applications).  A
 # user-level file shadows the system one and would point to the wrong
 # launcher after a package install.
-if ! [ -f /usr/share/applications/wavescope.desktop ]; then
+if [ "$PLATFORM" = "Linux" ] && ! [ -f /usr/share/applications/wavescope.desktop ]; then
     mkdir -p "$DESKTOP_DIR" "$ICON_DIR"
     cp "$SCRIPT_DIR/assets/icon.svg" "$ICON_DIR/wavescope.svg"
     cat > "$DESKTOP_DIR/wavescope.desktop" << DESKEOF
@@ -152,3 +172,11 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  ✓ Install complete!  Run: ./wavescope"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+if [ "$PLATFORM" = "Darwin" ]; then
+    echo ""
+    echo "macOS needs Location Services permission to reveal Wi-Fi names and BSSIDs."
+    echo "Use a properly signed Python (for example python.org), or build a signed"
+    echo "WaveScope.app with ./scripts/build_macos.sh; see README.md. An ad-hoc"
+    echo "signature may leave scan results redacted even after permission is granted."
+    echo "Packet capture is currently available on Linux only."
+fi

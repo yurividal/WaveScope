@@ -1850,7 +1850,7 @@ def _inherit_radio_params(aps: List[AccessPoint]) -> None:
 
 # ─────────────────────────────────────────────────────────────────────────────
 class WiFiScanner(QThread):
-    """Background thread: periodically calls nmcli and emits fresh AP list.
+    """Background thread: periodically scans through the platform backend.
 
     Every emitted AccessPoint is a private copy, so the GUI thread can
     mutate what it receives without racing the worker's linger cache.
@@ -1864,6 +1864,7 @@ class WiFiScanner(QThread):
     # Data sources
     SOURCE_IW = "iw"  # kernel scan cache via iw (single source of truth)
     SOURCE_NM = "nm"  # legacy: nmcli list, enriched with iw
+    SOURCE_COREWLAN = "corewlan"  # native macOS Wi-Fi API
 
     # NetworkManager rate-limits user-requested rescans (~10 s); rescanning
     # more often just returns the cached list, so rescans are time-based.
@@ -1871,7 +1872,10 @@ class WiFiScanner(QThread):
 
     def __init__(self, interval_sec: int = 2, linger_secs: float = 120.0, source: str = "iw"):
         super().__init__()
-        self._source = source if source in (self.SOURCE_IW, self.SOURCE_NM) else self.SOURCE_IW
+        if IS_MACOS:
+            self._source = self.SOURCE_COREWLAN
+        else:
+            self._source = source if source in (self.SOURCE_IW, self.SOURCE_NM) else self.SOURCE_IW
         self._interval = interval_sec
         self._linger_secs = linger_secs
         # bssid_lower → (AccessPoint, last_seen_monotonic)
@@ -1920,6 +1924,9 @@ class WiFiScanner(QThread):
         )
 
     def run(self):
+        if self._source == self.SOURCE_COREWLAN:
+            self._run_corewlan()
+            return
         last_rescan = -1e9
         cycle = 0
         while not self._stop_event.is_set():
@@ -1986,6 +1993,29 @@ class WiFiScanner(QThread):
             # Interruptible sleep: stop() wakes this immediately.
             self._stop_event.wait(self._interval)
 
+    def _run_corewlan(self) -> None:
+        # The synchronous native scan runs off the UI thread. CoreWLAN has
+        # no cancellation API: retain this QThread until an in-flight scan
+        # returns, and never emit a late result after pause/close.
+        from .macos_wifi import scan_corewlan
+
+        while not self._stop_event.is_set():
+            try:
+                aps, note = scan_corewlan(self._stop_event)
+                if self._stop_event.is_set():
+                    break
+                self._emit_note(note)
+                self.source_active.emit(self.SOURCE_COREWLAN)
+                self.data_ready.emit(self._merge_linger(aps))
+            except Exception as exc:
+                if self._stop_event.is_set():
+                    break
+                # Keep previous observations on a failed scan; an API or
+                # privacy failure is not a successful empty RF scan.
+                self._emit_note(str(exc))
+                self.scan_error.emit(str(exc))
+            self._stop_event.wait(max(self._interval, 1))
+
     def _emit_note(self, text: str) -> None:
         """Emit status_note only when the text changes (keeps the GUI quiet)."""
         if text != getattr(self, "_last_note", None):
@@ -2029,8 +2059,9 @@ class WiFiScanner(QThread):
     def stop(self, wait_ms: Optional[int] = 5000) -> bool:
         """Ask the thread to exit; returns True once it has finished.
 
-        Running subprocesses are killed within ~200 ms (see run_tool), so the
-        default 5 s wait is ample.  Pass wait_ms=None to wait indefinitely.
+        Linux subprocesses are killed within ~200 ms (see run_tool). An
+        in-flight CoreWLAN call must return before the thread can exit.
+        Pass wait_ms=None to wait until all native work has finished.
         """
         self._stop_event.set()
         if wait_ms is None:

@@ -3,3 +3,5 @@
 PyQt6>=6.4.0
 pyqtgraph>=0.13.0
 numpy>=1.23.0
+pyobjc-framework-CoreWLAN>=10.0; sys_platform == "darwin"
+pyobjc-framework-CoreLocation>=10.0; sys_platform == "darwin"

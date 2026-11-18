@@ -242,7 +242,7 @@ class APTableModel(QAbstractTableModel):
         if col == COL_FREQ:
             return str(ap.freq_mhz)
         if col == COL_BW:
-            return str(ap.bandwidth_mhz)
+            return str(ap.bandwidth_mhz) if ap.bandwidth_mhz else ""
         if col == COL_SPAN:
             return get_ap_channel_span(ap)
         if col == COL_SIG:
@@ -250,7 +250,7 @@ class APTableModel(QAbstractTableModel):
         if col == COL_DBM:
             return f"{ap.dbm} dBm"
         if col == COL_RATE:
-            return str(int(ap.rate_mbps))
+            return str(int(ap.rate_mbps)) if ap.rate_mbps else ""
         if col == COL_SEC:
             return ap.security_short
         if col == COL_MODE:

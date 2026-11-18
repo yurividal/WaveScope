@@ -34,6 +34,7 @@ _restore_host_env_for_children()
 
 import pyqtgraph as pg
 from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 from wavescope_app.core import APP_NAME, can_scan_at_all, find_missing_tools, tool_notices, warn_missing_tools_and_confirm
@@ -42,12 +43,15 @@ from wavescope_app.theme import _dark_palette, GRAPH_BG_DARK, GRAPH_AXIS_DARK
 
 
 def main():
+    # Exercise packaged imports, assets and the complete window in CI without
+    # Wi-Fi hardware, dependency dialogs or a Location Services prompt.
+    smoke_test = "--smoke-test" in sys.argv
     # ── Pyqtgraph config must come before QApplication ─────────────────────
     pg.setConfigOptions(
         antialias=True, foreground=GRAPH_AXIS_DARK, background=GRAPH_BG_DARK
     )
 
-    app = QApplication(sys.argv)
+    app = QApplication([arg for arg in sys.argv if arg != "--smoke-test"])
     # setDesktopFileName must come before setApplicationName / setOrganizationName
     # to avoid the portal "Connection already associated with an application ID" error.
     app.setDesktopFileName("wavescope")  # GNOME dock grouping / WM_CLASS hint
@@ -56,6 +60,15 @@ def main():
     app.setStyle("Fusion")
 
     icon_path = Path(__file__).parent / "assets" / "icon.svg"
+    if smoke_test:
+        for name in ("icon.svg", "vendors.json", "vendor_urls.json"):
+            if not (icon_path.parent / name).is_file():
+                raise RuntimeError(f"Packaged asset is missing: {name}")
+        if sys.platform == "darwin":
+            from wavescope_app.macos_wifi import corewlan_available
+
+            if not corewlan_available():
+                raise RuntimeError("Packaged CoreWLAN / CoreLocation bindings are missing")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
 
@@ -64,7 +77,7 @@ def main():
     # Only when no data source can work at all is a blocking dialog shown;
     # absent optional tools (NetworkManager, tcpdump, pkexec) are reported in
     # an in-window notice so the app always opens with its normal window.
-    if not can_scan_at_all():
+    if not smoke_test and not can_scan_at_all():
         missing = find_missing_tools()
         if missing and not warn_missing_tools_and_confirm(missing):
             sys.exit(1)
@@ -76,9 +89,28 @@ def main():
     font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
     app.setFont(font)
 
-    win = MainWindow()
+    win = MainWindow(start_scanner=not smoke_test)
     win.show_tool_notices(tool_notices())
     win.showMaximized()
+    if smoke_test:
+        QTimer.singleShot(250, win.close)
+    elif sys.platform == "darwin":
+        from wavescope_app.macos_permissions import request_location_access
+
+        def request_macos_permission():
+            # CoreLocation must be created on the foreground GUI thread;
+            # retain the manager for the lifetime of the window.
+            win._location_manager, notice = request_location_access()
+            if notice and notice != getattr(win, "_location_notice", ""):
+                win._on_status_note(notice)
+            win._location_notice = notice
+
+        QTimer.singleShot(0, request_macos_permission)
+        # Enabling global Location Services while the app is open may still
+        # require the first authorization request. The helper is idempotent.
+        win._location_timer = QTimer(win)
+        win._location_timer.timeout.connect(request_macos_permission)
+        win._location_timer.start(2000)
     sys.exit(app.exec())
 
 
