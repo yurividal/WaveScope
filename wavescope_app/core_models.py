@@ -238,6 +238,8 @@ class AccessPoint:
         return label
 
     def _security_label(self, sec_tokens, rsn_tokens, wpa_tokens, akms) -> str:
+        if "UNKNOWN" in sec_tokens and not (akms or self.has_rsn_ie or self.has_wpa1_ie):
+            return "Unknown"
         ignored = {"(none)", "--"} | ({"owe"} if "OWE-TM" in sec_tokens else set())
         has_rsn = self.has_rsn_ie or bool(rsn_tokens - ignored) or bool(sec_tokens & {"WPA2", "WPA3"})
         has_wpa1 = self.has_wpa1_ie or bool(wpa_tokens - {"(none)", "--"}) or "WPA1" in sec_tokens
@@ -268,7 +270,9 @@ class AccessPoint:
                 return "WPA3 (802.1X)"
             if ent_sha256:
                 return "WPA2/WPA3 (802.1X)"
-            return "WPA/WPA2 (802.1X)" if has_wpa1 else "WPA2 (802.1X)"
+            if has_wpa1:
+                return "WPA/WPA2 (802.1X)" if has_rsn else "WPA (802.1X)"
+            return "WPA2 (802.1X)"
         if personal_sae and personal_psk:
             return "WPA2/WPA3 (PSK/SAE)"
         if personal_sae:
@@ -279,14 +283,15 @@ class AccessPoint:
             return "WPA2 (PSK)" if has_rsn else "WPA (PSK)"
 
         # AKM unknown: fall back to nmcli's SECURITY summary.
+        enterprise = " (802.1X)" if "802.1X" in sec_tokens else ""
         if "WPA3" in sec_tokens and "WPA2" in sec_tokens:
-            return "WPA2/WPA3"
+            return "WPA2/WPA3" + enterprise
         if "WPA3" in sec_tokens:
-            return "WPA3"
+            return "WPA3" + enterprise
         if "WPA2" in sec_tokens and "WPA1" in sec_tokens:
             return "WPA/WPA2"
         if "WPA2" in sec_tokens:
-            return "WPA2"
+            return "WPA2" + enterprise
         if "WPA1" in sec_tokens:
             return "WPA"
         return "Unknown"
@@ -301,10 +306,10 @@ class AccessPoint:
 
         return (
             f"Security: {_nz(self.security_short)}\n"
-            f"nmcli SECURITY: {_nz(self.security)}\n"
+            f"Reported security: {_nz(self.security)}\n"
             f"WPA flags: {_nz(self.wpa_flags)}\n"
             f"RSN flags: {_nz(self.rsn_flags)}\n"
-            f"AKM (iw): {_nz(getattr(self, 'akm_raw', '') or self.akm)}\n"
+            f"AKM: {_nz(getattr(self, 'akm_raw', '') or self.akm)}\n"
             f"PMF: {_nz(self.pmf)}"
             + (f"\nRSN override AKM: {self.rsn_override_akm}" if self.rsn_override_akm else "")
             + (f"\nRSNX: {self.rsnx_caps}" if self.rsnx_caps else "")

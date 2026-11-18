@@ -1,13 +1,16 @@
 # Contributing to WaveScope
 
 Bug reports and pull requests are welcome. For bugs, please use the issue
-template: scan results depend heavily on the adapter, driver, `nmcli` and
-`iw` versions, and the template asks for all of them.
+template: scan results depend heavily on the adapter, driver and scan backend.
+On Linux include `nmcli` / `iw` versions; on macOS include the OS, Python and
+PyObjC versions, launch method, signing status and Location Services state.
 
 ## Development setup
 
-Requires Python 3.10+, NetworkManager (`nmcli`), `iw`, `tcpdump` and polkit
-(`pkexec`).
+Requires Python 3.10+ and Qt. Linux uses NetworkManager (`nmcli`) and `iw`,
+with `tcpdump` and polkit (`pkexec`) for capture. macOS uses CoreWLAN and
+CoreLocation through PyObjC; `install.sh` selects the platform dependencies.
+See the README's macOS section for executable signing and location permission.
 
 ```bash
 git clone https://github.com/yurividal/WaveScope.git
@@ -60,8 +63,9 @@ in `wavescope_app/vendor_beacon.py`:
 
 ## Building packages
 
-All scripts take an optional version argument and otherwise read `VERSION`
-from `core_base.py`. Output goes to the repository root.
+Package build scripts take an optional version argument and otherwise read
+`VERSION` from `core_base.py`. Linux packages go to the repository root;
+the macOS bundle goes to `dist/WaveScope.app`.
 
 | Package | Command | Needs |
 |---|---|---|
@@ -71,10 +75,39 @@ from `core_base.py`. Output goes to the repository root.
 | AppImage | `./scripts/build_appimage.sh` | `appimagetool` on the host |
 | AppImage (Docker) | `./scripts/build_appimage_docker.sh` | `docker` |
 | AppImage launch test (Xvfb, bare Ubuntu 22.04) | `./scripts/test_appimage_xvfb.sh WaveScope-*.AppImage` | `docker` |
+| macOS `.app` | `./scripts/build_macos.sh` | macOS, runtime dependencies, `requirements-macos-build.txt` |
 
-Release builds run in `.github/workflows/release.yml` when a `vX.Y.Z` tag is
+Linux release builds run in `.github/workflows/release.yml` when a `vX.Y.Z` tag is
 pushed. To rebuild an existing tag, run the workflow manually from the Actions
-tab and enter the tag.
+tab and enter the tag. macOS builds are local / CI development artifacts until
+the maintainer configures signing and notarization for distribution.
+
+### macOS validation
+
+`.github/workflows/test.yml` runs the suite on Ubuntu and macOS 15 (Apple Silicon
+and Intel). The macOS jobs import the real native bindings and build / smoke-test
+the `.app`, without requesting Location Services or requiring Wi-Fi hardware.
+The backend's framework fakes exercise metadata conversion and error handling on
+every OS. An ad-hoc CI signature does not validate access to Wi-Fi identifiers.
+
+Before claiming live macOS support verified, test a properly signed build on a
+Mac with Wi-Fi:
+
+- Launch from Finder, grant Location Services, and compare SSID, BSSID, channel,
+  width, RSSI and security with a known access point or Wireless Diagnostics.
+- Deny permission, disable Location Services, and revoke an existing grant;
+  each state must produce an actionable notice rather than an empty-scan claim.
+- Turn Wi-Fi off / on, disconnect / reconnect, and verify connected state and
+  telemetry refresh without stale data.
+- Check 2.4 GHz / 5 GHz and, with capable hardware, 6 GHz. Do not assume all Macs
+  or adapters support the same bands or PHY versions.
+- Pause, resume and close during a scan; verify the UI stays responsive and
+  shutdown safely waits for any in-flight native call.
+- Confirm packet-capture controls are unavailable on macOS, and sessions / CSV
+  export / labels / Find AP work without Linux tools.
+
+Record the macOS version, architecture, adapter, Python / PyObjC versions and
+signing identity type with the results. Do not commit real SSIDs or BSSIDs.
 
 ## Tests and the Wireshark cross-check
 

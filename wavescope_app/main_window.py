@@ -14,7 +14,7 @@ from .main_window_logic import load_issue_settings
 
 
 class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
-    def __init__(self):
+    def __init__(self, *, start_scanner: bool = True):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} v{VERSION}")
         self.resize(1400, 850)
@@ -80,8 +80,9 @@ class MainWindow(MainWindowLogicMixin, MainWindowUIMixin, QMainWindow):
         self._model.rows_changed.connect(self._auto_size_table_columns)
 
         self._restore_settings()
-        self._start_scanner()
-        self._status("Scanning…")
+        if start_scanner:
+            self._start_scanner()
+            self._status("Scanning…")
         # First run (no IEEE OUI JSON yet): offer the download in a banner —
         # never a modal dialog, so the first window is always the main window.
         if not OUI_JSON_PATH.exists():

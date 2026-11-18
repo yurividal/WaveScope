@@ -101,7 +101,11 @@ class MainWindowUIMixin:
         _tools_menu.addSeparator()
         _tools_menu.addAction("📖  Update OUI Database", self._on_update_oui)
         _tools_menu.addSeparator()
-        _tools_menu.addAction("📡  Packet Capture…", self._on_monitor_mode)
+        self._capture_action = _tools_menu.addAction("📡  Packet Capture…", self._on_monitor_mode)
+        if IS_MACOS:
+            self._capture_action.setEnabled(False)
+            self._capture_action.setToolTip("Packet capture is currently supported on Linux only.")
+        _tools_menu.setToolTipsVisible(True)
         _tools_menu.addSeparator()
         # Data source: kernel scan cache via iw (single source of truth) or
         # the legacy NetworkManager list enriched with iw.
@@ -109,13 +113,7 @@ class MainWindowUIMixin:
         self._source_group = QActionGroup(self)
         self._source_group.setExclusive(True)
         self._source_actions: dict = {}
-        for key, text, tip in (
-            ("iw", "Kernel scan cache via iw (recommended)",
-             "All BSS data from the kernel's scan results as decoded by iw;\n"
-             "NetworkManager is only asked to trigger scans."),
-            ("nm", "NetworkManager + iw (legacy)",
-             "BSS list from NetworkManager, enriched with iw data (pre-2.1 behaviour)."),
-        ):
+        for key, text, tip in scan_source_options():
             act = QAction(text, self, checkable=True)
             act.setToolTip(tip)
             act.setData(key)
@@ -123,8 +121,8 @@ class MainWindowUIMixin:
             _src_menu.addAction(act)
             self._source_actions[key] = act
         _src_menu.setToolTipsVisible(True)
-        self._data_source = "iw"
-        self._source_actions["iw"].setChecked(True)
+        self._data_source = scan_source_options()[0][0]
+        self._source_actions[self._data_source].setChecked(True)
         self._source_group.triggered.connect(lambda a: self._on_source_change(a.data()))
         # Keyboard shortcuts for the new actions
         for seq, slot in (

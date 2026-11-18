@@ -204,6 +204,10 @@ def test_compare_dialog_counts_differences():
 
 def test_settings_dialog_applies_values(monkeypatch):
     from PyQt6.QtWidgets import QComboBox, QMessageBox, QSpinBox
+    from wavescope_app import core_base
+
+    # This case exercises Linux source selection even on a macOS runner.
+    monkeypatch.setattr(core_base, "IS_MACOS", False)
 
     # the invalid-pattern path shows a modal warning: don't block the test
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))

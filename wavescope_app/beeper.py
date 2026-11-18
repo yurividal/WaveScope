@@ -23,7 +23,7 @@ from typing import Dict, List, Optional
 
 from .core import *  # noqa: F401,F403  (Qt widgets, AccessPoint, colours)
 
-PLAYERS = ("pw-play", "paplay", "aplay")
+PLAYERS = ("afplay",) if IS_MACOS else ("pw-play", "paplay", "aplay")
 DBM_MIN, DBM_MAX = -95.0, -30.0  # meter / tone mapping range
 PITCHES_HZ = [440, 523, 622, 740, 880, 1047, 1245, 1480, 1760]  # musical steps
 
@@ -135,7 +135,7 @@ class FindAPDialog(QDialog):
         self._chk_sound = QCheckBox("Sound")
         self._chk_sound.setChecked(sound)
         if self._beeper.player is None:
-            self._chk_sound.setToolTip("No pw-play / paplay / aplay found — using the system beep")
+            self._chk_sound.setToolTip(f"No {' / '.join(PLAYERS)} found — using the system beep")
         row.addWidget(self._chk_sound)
         row.addStretch()
         btn = QPushButton("Close")
@@ -144,6 +144,8 @@ class FindAPDialog(QDialog):
         lay.addLayout(row)
 
         note = QLabel(
+            "Signal updates after each CoreWLAN scan completes."
+            if IS_MACOS else
             "Signal updates with each scan. For the connected AP every refresh cycle; "
             "for other APs whenever the system scans (NetworkManager allows about one scan every 10 s)."
         )

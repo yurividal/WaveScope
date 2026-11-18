@@ -79,7 +79,7 @@ FIELDS: List[Field] = [
     Field("band", "Band", "RF", lambda a: a.band),
     Field("channel", "Channel", "RF", lambda a: _s(a.channel), lambda a: _num(a.channel)),
     Field("freq", "Primary frequency (MHz)", "RF", lambda a: _s(a.freq_mhz), lambda a: _num(a.freq_mhz)),
-    Field("width", "Width (MHz)", "RF", lambda a: _s(a.bandwidth_mhz), lambda a: _num(a.bandwidth_mhz)),
+    Field("width", "Width (MHz)", "RF", lambda a: _s(a.bandwidth_mhz or None), lambda a: _num(a.bandwidth_mhz)),
     Field("span", "Channel span", "RF", get_ap_channel_span),
     Field(
         "center", "Block center (MHz)", "RF",
@@ -91,7 +91,7 @@ FIELDS: List[Field] = [
     Field("dbm", "RSSI (dBm)", "RF", lambda a: _s(a.dbm), lambda a: _num(a.dbm)),
     Field(
         "dbm_source", "RSSI source", "RF",
-        lambda a: "iw (exact)" if a.dbm_exact is not None else "nmcli % (estimate)",
+        lambda a: "Exact RSSI" if a.dbm_exact is not None else "Signal % (estimate)",
     ),
     Field("country", "Country", "RF", lambda a: a.country),
     Field("country_env", "Country environment", "RF", lambda a: a.country_env),
@@ -105,7 +105,7 @@ FIELDS: List[Field] = [
     # ── PHY ────────────────────────────────────────────────────────────────
     Field("wifi_gen", "Wi-Fi generation", "PHY", lambda a: ("≥" if a.gen_inferred else "") + a.wifi_gen),
     Field("phy_mode", "802.11 PHY", "PHY", lambda a: a.phy_mode),
-    Field("max_rate", "Max PHY rate (Mbps)", "PHY", lambda a: _s(int(a.rate_mbps)), lambda a: _num(a.rate_mbps)),
+    Field("max_rate", "Max PHY rate (Mbps)", "PHY", lambda a: _s(int(a.rate_mbps) if a.rate_mbps else None), lambda a: _num(a.rate_mbps)),
     Field("phy_caps", "PHY capabilities", "PHY", lambda a: a.phy_cap_summary, table=True),
     Field("he_features", "HE/EHT features", "PHY", lambda a: a.he_eht_features),
     Field(
@@ -118,7 +118,7 @@ FIELDS: List[Field] = [
     Field("b_rates", "802.11b rates enabled", "PHY", lambda a: _s(a.has_11b_rates), table=True),
     # ── Security ───────────────────────────────────────────────────────────
     Field("security", "Security", "Security", lambda a: a.security_short),
-    Field("security_nm", "Security (nmcli tokens)", "Security", lambda a: a.security),
+    Field("security_nm", "Reported security", "Security", lambda a: a.security),
     Field("akm", "AKM suites", "Security", lambda a: _s(a.akm_suites) or a.akm_raw, table=True),
     Field("pmf", "PMF (802.11w)", "Security", lambda a: a.pmf, table=True),
     Field("group_mgmt", "Group mgmt cipher", "Security", lambda a: a.group_mgmt_cipher, table=True),

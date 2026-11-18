@@ -17,3 +17,10 @@ colorama==0.4.6
 # stays on the 2.2 series.  2.4.6 ships cp311-cp314 wheels.
 numpy==2.2.6; python_version < "3.11"
 numpy==2.4.6; python_version >= "3.11"
+
+# CoreWLAN/CoreLocation are optional off macOS. PyObjC 13 dropped Python
+# 3.10; keep its last compatible wheel series for source installs on 3.10.
+pyobjc-framework-CoreWLAN==12.2.2; sys_platform == "darwin" and python_version < "3.11"
+pyobjc-framework-CoreLocation==12.2.2; sys_platform == "darwin" and python_version < "3.11"
+pyobjc-framework-CoreWLAN==13.0; sys_platform == "darwin" and python_version >= "3.11"
+pyobjc-framework-CoreLocation==13.0; sys_platform == "darwin" and python_version >= "3.11"

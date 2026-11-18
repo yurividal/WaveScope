@@ -23,7 +23,10 @@ VENDOR_ICON_MAX_W = 42
 VENDOR_ICON_MAX_H = 16
 
 # Path where we save the downloaded IEEE OUI database
-OUI_DATA_DIR = Path.home() / ".local" / "share" / "wavescope"
+OUI_DATA_DIR = (
+    Path.home() / "Library" / "Application Support" / "WaveScope"
+    if IS_MACOS else Path.home() / ".local" / "share" / "wavescope"
+)
 OUI_JSON_PATH = OUI_DATA_DIR / "oui.json"
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 OUI_VENDOR_FALLBACK_JSON_PATH = _PROJECT_ROOT / "assets" / "vendors.json"

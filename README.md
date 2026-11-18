@@ -1,6 +1,6 @@
 # WaveScope
 
-> A modern, fast WiFi analyzer for Linux — built with PyQt6 and Python.
+> A modern, fast WiFi analyzer for Linux and macOS — built with PyQt6 and Python.
 
 ![WaveScope Screenshot](assets/screenshot.png)
 
@@ -8,7 +8,7 @@
 
 ## About
 
-WaveScope is an open-source WiFi analyzer designed for Linux desktops. It gives you a real-time, high-detail view of the wireless networks around you — from signal strength and channel occupancy to security modes, WiFi generations, and manufacturer data.
+WaveScope is an open-source WiFi analyzer for Linux and macOS desktops. It gives you a real-time view of the wireless networks around you — from signal strength and channel occupancy to security modes, WiFi generations, and manufacturer data. Linux uses `iw` / NetworkManager; macOS uses Apple's public CoreWLAN framework. Available detail depends on the platform, adapter and access point (see the platform table below).
 
 > 🤖 This application was built mostly using **Claude Code AI** (by Anthropic), with iterative development driven by human feedback.
 
@@ -20,7 +20,7 @@ WaveScope is an open-source WiFi analyzer designed for Linux desktops. It gives 
 - 📈 **Signal history plot** — rolling 2-minute time series per access point
 - 🔍 **Rich AP metadata** — SSID, BSSID, manufacturer (OUI), band, channel, bandwidth, signal (dBm), security, WiFi generation, channel utilization, connected clients, 802.11k/v/r roaming support
 - 🧰 **Troubleshooting tools** — Issues tab (configuration problems with explanations), side-by-side Compare, per-BSSID labels with wildcards, column profiles with pinned columns, Find AP beeper, saved sessions and CSV export; all preferences in one Settings dialog
-- 🎯 **Single source of truth** — all BSS data comes from the kernel's scan cache via `iw`, cross-checked against Wireshark; NetworkManager is only asked to trigger scans (Tools ▸ Data Source keeps the legacy NetworkManager + iw mode)
+- 🎯 **Native scan data** — Linux reads the kernel's scan cache via `iw`, cross-checked against Wireshark, with NetworkManager triggering scans; macOS reads CoreWLAN scan results directly
 - 🧭 **RF analysis** — per-channel congestion score, HE BSS-color collision alerts, roam candidates for the connected SSID, SNR and per-antenna RSSI for the current link
 - 📶 **Wi-Fi 6E / 7 detail** — 6 GHz PSC markers and AP power type (LPI/SP/VLP), 320 MHz channels, EHT puncturing drawn on the graph, multi-link (MLD) grouping, co-located 6 GHz APs from the Reduced Neighbor Report
 - 🔐 **Security detail** — WPA3 Personal/Enterprise/192-bit modes, SAE-EXT-KEY, SAE H2E/SAE-PK (RSNX), OWE transition pairs, 802.11r mobility domain
@@ -34,10 +34,10 @@ WaveScope is an open-source WiFi analyzer designed for Linux desktops. It gives 
 - 🖼️ **Vendor icons** — logos for recognized manufacturers
 - ⚡ **Configurable refresh rate** — 1s to 10s
 - 💾 **Settings are saved between sessions** — theme, refresh interval, column widths and window layout
-- 🩺 **Startup dependency check** — warns on launch if `nmcli`, `iw`, `tcpdump` or `pkexec` is missing and says what will not work without it
+- 🩺 **Platform-aware startup checks** — checks Linux tools or macOS framework bindings and explains Location Services requirements
 - 🖱️ **Interactive graphs** — click labels to highlight, scroll to zoom, drag to pan
 - 🔎 **Filter & sort** — by any column, with text search
-- 📦 **Packet capture** — two modes available via the toolbar:
+- 📦 **Packet capture (Linux)** — two modes available via the toolbar:
   - **Monitor Mode**: raw 802.11 over-the-air capture of all frames on a chosen channel (all devices); temporarily disconnects WiFi, restored automatically on stop
   - **Managed Mode**: capture your own machine's traffic without disconnecting from the network; WiFi stays connected throughout
   - Both modes output standard `.pcap` files (Wireshark-compatible) and require a single root prompt
@@ -46,12 +46,19 @@ WaveScope is an open-source WiFi analyzer designed for Linux desktops. It gives 
 
 ## Platform
 
-| | |
-|---|---|
-| **OS** | Linux |
-| **Packages** | `.deb` (Debian 12+, Ubuntu 24.04+), `.rpm` (Fedora, openSUSE), AppImage (any x86_64 distro with glibc 2.35+) |
-| **Requires** | NetworkManager (`nmcli`), `iw`; `tcpdump` + polkit (`pkexec`) for packet capture |
-| **Python** | 3.10 or newer |
+| | Linux | macOS |
+|---|---|---|
+| **Installation** | `.deb` (Debian 12+, Ubuntu 24.04+), `.rpm` (Fedora, openSUSE), AppImage (x86_64, glibc 2.35+), source | Source or locally built `.app`, native Apple Silicon / Intel |
+| **Scan backend** | `iw`; NetworkManager (`nmcli`) triggers scans | CoreWLAN through PyObjC; Location Services permission and a properly signed executable |
+| **Python** | 3.10 or newer | 3.10 or newer, with compatible Python / Qt / PyObjC wheels for your macOS release |
+| **Network list, signal history, channel graph, filters, manufacturer lookup** | Yes | Yes, subject to CoreWLAN / adapter support |
+| **Sessions, CSV export, comparison, labels, Find AP** | Yes | Yes |
+| **Connected-link telemetry** | Driver-dependent rates, counters, SNR, survey and antenna data | CoreWLAN connection details, transmit rate, RSSI, noise and SNR when available |
+| **Detailed beacon / PHY metadata** | Full `iw` parser | RSN / PMF, BSS load, country, DTIM, 802.11k/v/r and PHY generation when advertised; vendor AP names / transmit power, RNR, MLD and HE color are not decoded |
+| **Maximum PHY rate** | Derived from advertised capabilities | Left unavailable when it cannot be determined; the current link rate is shown separately |
+| **Packet capture** | `tcpdump` + polkit (`pkexec`), managed and monitor modes | Not implemented; capture controls are disabled |
+
+macOS CI covers imports, tests and `.app` builds on macOS 15 for Apple Silicon and Intel. It does not validate live scanning or the Location Services prompt. A built `.app` targets the architecture and macOS release used to build it; older releases depend on the Python and Qt versions installed.
 
 ---
 
@@ -154,7 +161,50 @@ chmod +x install.sh
 
 ---
 
+### Option F — macOS
+
+Install a current, signed Python from [python.org](https://www.python.org/downloads/macos/), then run:
+
+```bash
+git clone https://github.com/yurividal/WaveScope.git
+cd WaveScope
+./install.sh
+./wavescope
+```
+
+On macOS, `install.sh` installs the Qt dependencies and PyObjC bindings in `.venv`. It skips Linux package managers, `nmcli`, `iw`, polkit and Linux desktop files. To select a particular Python before creating the virtual environment, use `WAVESCOPE_PYTHON=/path/to/python3 ./install.sh`.
+
+**Location Services and signing:** macOS protects Wi-Fi names and BSSIDs as location-sensitive information. A signed `.app` requests permission on first launch. A source interpreter without location usage descriptions must already have access; WaveScope displays guidance instead of making an invalid permission request. Check **System Settings → Privacy & Security → Location Services** for WaveScope or the Python / terminal application used to launch it, and restart WaveScope after changing permissions. The UI reports blocked or redacted scan data rather than treating it as an empty neighborhood.
+
+CoreWLAN also requires a properly signed executable. The [PyObjC CoreWLAN notes](https://pyobjc.readthedocs.io/en/latest/apinotes/CoreWLAN.html) explicitly exclude ad-hoc signatures; a Homebrew Python or ad-hoc `.app` can still return redacted identifiers after a location grant. Source launches with signed python.org Python are a development option, but the permission's application identity depends on the launcher. For a stable WaveScope identity and its own permission prompt, [build a signed `.app`](#macos-app) using an Apple-issued signing identity. No root access or deprecated `airport` command is needed.
+
+---
+
 ## Build packages from source
+
+### macOS `.app`
+
+Build on a Mac with the same architecture as the intended users:
+
+```bash
+./install.sh
+.venv/bin/python -m pip install -r requirements-macos-build.txt
+
+# Use an Apple-issued identity already present in your macOS keychain.
+WAVESCOPE_CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+  ./scripts/build_macos.sh
+open dist/WaveScope.app
+```
+
+The build bundles Python, Qt, PyObjC, vendor data and icons. It sets the application identifier to `io.github.yurividal.WaveScope`, includes the Location Services usage descriptions, and verifies the code signature. When a signing identity is supplied, PyInstaller enables the hardened runtime; the included entitlement allows the executable callbacks required by PyObjC ([PyObjC signing notes](https://pyobjc.readthedocs.io/en/latest/notes/codesigning.html)). Signing identities and credentials are not included in the repository.
+
+Without `WAVESCOPE_CODESIGN_IDENTITY`, the script creates an ad-hoc signed development bundle for UI and build checks. **That bundle is not a guarantee of working live Wi-Fi scans.** Public distribution also needs the maintainer's signing and notarization process; this repository does not publish macOS release assets automatically. Build Apple Silicon and Intel packages separately. The script accepts an optional `X.Y.Z` version and `WAVESCOPE_PYTHON` to select the build environment.
+
+To check the packaged UI and assets without requesting location access or scanning:
+
+```bash
+QT_QPA_PLATFORM=offscreen dist/WaveScope.app/Contents/MacOS/WaveScope --smoke-test
+```
 
 ### .deb (Debian/Ubuntu)
 
@@ -224,16 +274,23 @@ docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp \
 
 ## Requirements
 
-### System
+### Linux system packages
 - `nmcli` — provided by `network-manager`
 - `iw` — for enriched scan data (WiFi generation, exact dBm, BSS load, etc.)
 - `tcpdump` — required for packet capture (Monitor & Managed modes)
 - `pkexec` — from polkit (`pkexec`/`polkitd`/`policykit-1` on Debian/Ubuntu, `polkit` on Fedora/openSUSE); required for root privilege during packet capture
 
+### macOS system requirements
+
+- A Wi-Fi adapter exposed by CoreWLAN and compatible Python / Qt wheels
+- Location Services enabled and granted to the application
+- A properly signed Python executable or WaveScope `.app` for Wi-Fi identifiers
+
 ### Python packages
 - `PyQt6 >= 6.4.0` (from PyPI for source installs and the AppImage; from the distro for .deb/.rpm)
 - `pyqtgraph >= 0.13.0`
 - `numpy >= 1.23.0`
+- `pyobjc-framework-CoreWLAN` and `pyobjc-framework-CoreLocation` (macOS only)
 
 `requirements.txt` has the minimum versions. `constraints.txt` pins the exact versions that every install method uses.
 
